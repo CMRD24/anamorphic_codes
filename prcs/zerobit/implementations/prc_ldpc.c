@@ -1,10 +1,26 @@
-#include "prc_ldpc.h"
+#include "../zerobit_prc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <limits.h>
+#include <stdint.h>
+
+
+/*
+ * ================================================================
+ * LDPC-specific parameters
+ * ================================================================
+ */
+
+typedef struct {
+    size_t n;
+    size_t r;
+    size_t g;
+    size_t t;
+    double eta;
+} LDPCParams;
 
 
 /*
@@ -26,15 +42,6 @@ static size_t words_for_bits(size_t bits)
  * ================================================================
  * Packed bit vector
  * ================================================================
- *
- * Bit i is stored in:
- *
- *     data[i / 64]
- *
- * at position:
- *
- *     i % 64
- * ================================================================
  */
 
 typedef struct {
@@ -50,12 +57,11 @@ static BitVector bitvector_alloc(size_t bits)
 
     v.bits = bits;
     v.words = words_for_bits(bits);
-
     v.data = calloc(v.words, sizeof(uint64_t));
 
     if (v.data == NULL && v.words != 0) {
         fprintf(stderr,
-                "PRC: bit vector allocation failed.\n");
+                "ZBPRC-LDPC: bit vector allocation failed.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -100,14 +106,6 @@ static inline void bit_set(BitVector *v,
 }
 
 
-static inline void bit_flip(BitVector *v,
-                            size_t index)
-{
-    v->data[index >> 6] ^=
-        1ULL << (index & 63);
-}
-
-
 static void bitvector_zero(BitVector *v)
 {
     memset(v->data,
@@ -130,9 +128,10 @@ static size_t bitvector_weight(const BitVector *v)
     }
 
     /*
-     * The last word can contain padding bits.
+     * Remove padding bits from the final word.
      */
     if (v->bits & 63) {
+
         size_t valid =
             v->bits & 63;
 
@@ -157,28 +156,23 @@ static size_t bitvector_weight(const BitVector *v)
  * ================================================================
  */
 
-static void random_bytes(PRCRandom *random,
+static void random_bytes(ZBPRC_Random *random,
                          uint8_t *out,
                          size_t len)
 {
     if (random == NULL ||
         random->rng == NULL ||
-        !random->rng(random->ctx,
-                     out,
-                     len)) {
+        !random->rng(random->ctx, out, len)) {
 
         fprintf(stderr,
-                "PRC: secure randomness failure.\n");
+                "ZBPRC-LDPC: secure randomness failure.\n");
 
         exit(EXIT_FAILURE);
     }
 }
 
 
-/*
- * Random 64-bit word.
- */
-static uint64_t random_u64(PRCRandom *random)
+static uint64_t random_u64(ZBPRC_Random *random)
 {
     uint64_t x;
 
@@ -189,10 +183,8 @@ static uint64_t random_u64(PRCRandom *random)
     return x;
 }
 
-/*
- * Return one cryptographically secure random bit.
- */
-static uint8_t random_bit(PRCRandom *random)
+
+static uint8_t random_bit(ZBPRC_Random *random)
 {
     return (uint8_t)(random_u64(random) & 1ULL);
 }
@@ -204,7 +196,7 @@ static uint8_t random_bit(PRCRandom *random)
  * ================================================================
  */
 
-static void random_bitvector(PRCRandom *random,
+static void random_bitvector(ZBPRC_Random *random,
                              BitVector *v)
 {
     for (size_t i = 0;
@@ -215,9 +207,6 @@ static void random_bitvector(PRCRandom *random,
             random_u64(random);
     }
 
-    /*
-     * Clear padding bits.
-     */
     if (v->bits & 63) {
 
         size_t valid =
@@ -235,16 +224,12 @@ static void random_bitvector(PRCRandom *random,
  * ================================================================
  * Bernoulli vector
  * ================================================================
- *
- * Generates n independent Bernoulli(eta) bits.
- *
- * We generate one 64-bit random value at a time.
- * ================================================================
  */
 
-static void random_bernoulli_vector(PRCRandom *random,
-                                    BitVector *v,
-                                    double eta)
+static void random_bernoulli_vector(
+    ZBPRC_Random *random,
+    BitVector *v,
+    double eta)
 {
     bitvector_zero(v);
 
@@ -272,13 +257,6 @@ static void random_bernoulli_vector(PRCRandom *random,
         return;
     }
 
-    /*
-     * This is intentionally simple and exact:
-     * generate one uniform 53-bit value per bit.
-     *
-     * For very large parameters, this can be optimized
-     * using a binomial sampler / thresholding technique.
-     */
     for (size_t i = 0;
          i < v->bits;
          ++i) {
@@ -299,19 +277,6 @@ static void random_bernoulli_vector(PRCRandom *random,
  * ================================================================
  * Sparse P
  * ================================================================
- *
- * Each row stores exactly t column positions.
- *
- * Instead of:
- *
- *     r x n bits
- *
- * we store:
- *
- *     r x t indices
- *
- * requiring O(rt log n) bits.
- * ================================================================
  */
 
 typedef struct {
@@ -319,11 +284,7 @@ typedef struct {
     size_t n;
     size_t t;
 
-    /*
-     * positions[row * t + j]
-     */
     size_t *positions;
-
 } SparseP;
 
 
@@ -344,7 +305,7 @@ static SparseP sparse_p_alloc(size_t r,
         r * t != 0) {
 
         fprintf(stderr,
-                "PRC: sparse P allocation failed.\n");
+                "ZBPRC-LDPC: sparse P allocation failed.\n");
 
         exit(EXIT_FAILURE);
     }
@@ -367,12 +328,7 @@ static void sparse_p_free(SparseP *P)
 }
 
 
-/*
- * Uniform integer in [0,bound).
- *
- * Rejection sampling.
- */
-static size_t random_bounded(PRCRandom *random,
+static size_t random_bounded(ZBPRC_Random *random,
                              size_t bound)
 {
     if (bound == 0)
@@ -381,7 +337,7 @@ static size_t random_bounded(PRCRandom *random,
     uint64_t x;
 
     /*
-     * Use 64-bit rejection sampling.
+     * Rejection sampling.
      */
     uint64_t limit =
         UINT64_MAX -
@@ -395,14 +351,12 @@ static size_t random_bounded(PRCRandom *random,
 }
 
 
-/*
- * Check whether a column already occurs in a row.
- */
 static int sparse_row_contains(const SparseP *P,
                                size_t row,
                                size_t col)
 {
-    size_t base = row * P->t;
+    size_t base =
+        row * P->t;
 
     for (size_t j = 0;
          j < P->t;
@@ -416,10 +370,7 @@ static int sparse_row_contains(const SparseP *P,
 }
 
 
-/*
- * Sample sparse P.
- */
-static void sample_sparse_p(PRCRandom *random,
+static void sample_sparse_p(ZBPRC_Random *random,
                             SparseP *P)
 {
     for (size_t row = 0;
@@ -452,14 +403,6 @@ static void sample_sparse_p(PRCRandom *random,
 /*
  * ================================================================
  * Sparse P × vector
- *
- * y = Px
- *
- * Cost:
- *
- *     O(rt)
- *
- * rather than O(rn).
  * ================================================================
  */
 
@@ -497,7 +440,7 @@ static void sparse_p_mul(const SparseP *P,
 
 /*
  * ================================================================
- * Packed matrix used only during Gaussian elimination
+ * Packed matrix
  * ================================================================
  */
 
@@ -507,7 +450,6 @@ typedef struct {
     size_t words;
 
     uint64_t *data;
-
 } PackedMatrix;
 
 
@@ -528,7 +470,7 @@ static PackedMatrix packed_matrix_alloc(size_t rows,
         rows * M.words != 0) {
 
         fprintf(stderr,
-                "PRC: packed matrix allocation failed.\n");
+                "ZBPRC-LDPC: packed matrix allocation failed.\n");
 
         exit(EXIT_FAILURE);
     }
@@ -591,9 +533,6 @@ static inline void packed_matrix_set(
 }
 
 
-/*
- * XOR two packed rows.
- */
 static inline void packed_row_xor(
     uint64_t *dst,
     const uint64_t *src,
@@ -607,14 +546,6 @@ static inline void packed_row_xor(
     }
 }
 
-
-/*
- * ================================================================
- * Construct packed matrix representation of P
- *
- * This is only used for Gaussian elimination.
- * ================================================================
- */
 
 static PackedMatrix sparse_p_to_packed(
     const SparseP *P)
@@ -648,15 +579,7 @@ static PackedMatrix sparse_p_to_packed(
 
 /*
  * ================================================================
- * Kernel basis of P
- *
- * Returns K with dimensions
- *
- *     n × (n-rank(P))
- *
- * as packed columns.
- *
- * For simplicity, K is stored as an array of BitVectors.
+ * Kernel basis
  * ================================================================
  */
 
@@ -689,11 +612,7 @@ static void kernel_basis_free(KernelBasis *K)
 }
 
 
-/*
- * Compute ker(P).
- */
-static KernelBasis kernel_basis(
-    const SparseP *P)
+static KernelBasis kernel_basis(const SparseP *P)
 {
     PackedMatrix A =
         sparse_p_to_packed(P);
@@ -705,7 +624,7 @@ static KernelBasis kernel_basis(
         P->r != 0) {
 
         fprintf(stderr,
-                "PRC: allocation failed.\n");
+                "ZBPRC-LDPC: allocation failed.\n");
 
         exit(EXIT_FAILURE);
     }
@@ -713,10 +632,7 @@ static KernelBasis kernel_basis(
     size_t rank = 0;
 
     /*
-     * Gauss-Jordan elimination.
-     *
-     * Since rows are packed, eliminating a row costs
-     * only ceil(n/64) XORs.
+     * Gauss-Jordan elimination over F_2.
      */
     for (size_t col = 0;
          col < P->n && rank < P->r;
@@ -740,9 +656,6 @@ static KernelBasis kernel_basis(
         if (pivot == SIZE_MAX)
             continue;
 
-        /*
-         * Swap row pointers by swapping their contents.
-         */
         if (pivot != rank) {
 
             uint64_t *a =
@@ -770,9 +683,6 @@ static KernelBasis kernel_basis(
                 &A,
                 rank);
 
-        /*
-         * Eliminate pivot from all other rows.
-         */
         for (size_t row = 0;
              row < P->r;
              ++row) {
@@ -814,7 +724,7 @@ static KernelBasis kernel_basis(
         dimension != 0) {
 
         fprintf(stderr,
-                "PRC: allocation failed.\n");
+                "ZBPRC-LDPC: allocation failed.\n");
 
         exit(EXIT_FAILURE);
     }
@@ -826,7 +736,7 @@ static KernelBasis kernel_basis(
         P->n != 0) {
 
         fprintf(stderr,
-                "PRC: allocation failed.\n");
+                "ZBPRC-LDPC: allocation failed.\n");
 
         exit(EXIT_FAILURE);
     }
@@ -840,9 +750,6 @@ static KernelBasis kernel_basis(
 
     size_t kernel_index = 0;
 
-    /*
-     * For every free variable construct a basis vector.
-     */
     for (size_t free_col = 0;
          free_col < P->n;
          ++free_col) {
@@ -853,20 +760,10 @@ static KernelBasis kernel_basis(
         BitVector v =
             bitvector_alloc(P->n);
 
-        /*
-         * Free variable = 1.
-         */
         bit_set(&v,
                 free_col,
                 1);
 
-        /*
-         * Because A is in reduced row-echelon form:
-         *
-         *     x_p + A[p,f] x_f = 0
-         *
-         * over F₂, so x_p = A[p,f].
-         */
         for (size_t row = 0;
              row < rank;
              ++row) {
@@ -902,13 +799,6 @@ static KernelBasis kernel_basis(
  * ================================================================
  * G
  * ================================================================
- *
- * G is represented column-wise:
- *
- *     G[:,j]
- *
- * is one packed BitVector.
- * ================================================================
  */
 
 typedef struct {
@@ -934,7 +824,7 @@ static PackedG packed_g_alloc(size_t n,
         g != 0) {
 
         fprintf(stderr,
-                "PRC: G allocation failed.\n");
+                "ZBPRC-LDPC: G allocation failed.\n");
 
         exit(EXIT_FAILURE);
     }
@@ -972,9 +862,6 @@ static void packed_g_free(PackedG *G)
 }
 
 
-/*
- * Gs = sum_j s_j G_j
- */
 static void packed_g_mul(
     const PackedG *G,
     const BitVector *s,
@@ -993,8 +880,7 @@ static void packed_g_mul(
                  ++w) {
 
                 result->data[w] ^=
-                    G->columns[j]
-                        .data[w];
+                    G->columns[j].data[w];
             }
         }
     }
@@ -1003,19 +889,50 @@ static void packed_g_mul(
 
 /*
  * ================================================================
- * Key structures
+ * Opaque key structures
  * ================================================================
  */
 
-struct PRCEncKey {
+struct ZBPRC_EncKey {
     PackedG G;
     BitVector z;
 };
 
-struct PRCDecKey {
+
+struct ZBPRC_DecKey {
     SparseP P;
     BitVector z;
 };
+
+
+/*
+ * ================================================================
+ * Key destruction
+ * ================================================================
+ */
+
+void ldpc_free_enc_key(const void *params, ZBPRC_EncKey *key)
+{
+    if (key == NULL)
+        return;
+
+    packed_g_free(&key->G);
+    bitvector_free(&key->z);
+
+    free(key);
+}
+
+
+void ldpc_free_dec_key(const void *params, ZBPRC_DecKey *key)
+{
+    if (key == NULL)
+        return;
+
+    sparse_p_free(&key->P);
+    bitvector_free(&key->z);
+
+    free(key);
+}
 
 
 /*
@@ -1024,9 +941,13 @@ struct PRCDecKey {
  * ================================================================
  */
 
-PRCKeys *prc_keygen(const PRCParams *params,
-                    PRCRandom *random)
+ZBPRC_Keys *
+ldpc_keygen(const void *params_ptr,
+            ZBPRC_Random *random)
 {
+    const LDPCParams *params =
+        (const LDPCParams *)params_ptr;
+
     if (params == NULL ||
         random == NULL ||
         random->rng == NULL)
@@ -1039,27 +960,30 @@ PRCKeys *prc_keygen(const PRCParams *params,
         params->g > params->n)
         return NULL;
 
-    PRCKeys *keys =
-        calloc(1, sizeof(PRCKeys));
+    ZBPRC_Keys *keys =
+        calloc(1, sizeof(ZBPRC_Keys));
 
     if (keys == NULL)
         return NULL;
 
     keys->enc =
-        calloc(1, sizeof(PRCEncKey));
+        calloc(1, sizeof(ZBPRC_EncKey));
 
     keys->dec =
-        calloc(1, sizeof(PRCDecKey));
+        calloc(1, sizeof(ZBPRC_DecKey));
 
-    if (!keys->enc ||
-        !keys->dec) {
+    if (keys->enc == NULL ||
+    keys->dec == NULL) {
 
-        prc_free_keys(keys);
+        ldpc_free_enc_key(params_ptr, keys->enc);
+        ldpc_free_dec_key(params_ptr, keys->dec);
+        free(keys);
+
         return NULL;
     }
 
     /*
-     * P.
+     * Sample P.
      */
     SparseP P =
         sparse_p_alloc(params->r,
@@ -1069,7 +993,7 @@ PRCKeys *prc_keygen(const PRCParams *params,
     sample_sparse_p(random, &P);
 
     /*
-     * Kernel of P.
+     * Compute ker(P).
      */
     KernelBasis K =
         kernel_basis(&P);
@@ -1077,28 +1001,27 @@ PRCKeys *prc_keygen(const PRCParams *params,
     if (params->g > K.dimension) {
 
         fprintf(stderr,
-                "PRC: g=%zu exceeds "
+                "ZBPRC-LDPC: g=%zu exceeds "
                 "dim ker(P)=%zu.\n",
                 params->g,
                 K.dimension);
 
         kernel_basis_free(&K);
         sparse_p_free(&P);
-        prc_free_keys(keys);
+        ldpc_free_enc_key(params_ptr, keys->enc);
+        ldpc_free_dec_key(params_ptr, keys->dec);
+        free(keys);
 
         return NULL;
     }
 
     /*
-     * G.
+     * Sample G uniformly from ker(P).
      */
     PackedG G =
         packed_g_alloc(params->n,
                        params->g);
 
-    /*
-     * Sample each column of G uniformly from ker(P).
-     */
     for (size_t j = 0;
          j < params->g;
          ++j) {
@@ -1123,7 +1046,7 @@ PRCKeys *prc_keygen(const PRCParams *params,
     kernel_basis_free(&K);
 
     /*
-     * z.
+     * Sample z.
      */
     BitVector z =
         bitvector_alloc(params->n);
@@ -1131,10 +1054,9 @@ PRCKeys *prc_keygen(const PRCParams *params,
     random_bitvector(random, &z);
 
     /*
-     * Encryption key.
+     * Both keys contain the same z.
      */
     keys->enc->G = G;
-
     keys->enc->z =
         bitvector_alloc(params->n);
 
@@ -1142,11 +1064,7 @@ PRCKeys *prc_keygen(const PRCParams *params,
            z.data,
            z.words * sizeof(uint64_t));
 
-    /*
-     * Decryption key.
-     */
     keys->dec->P = P;
-
     keys->dec->z =
         bitvector_alloc(params->n);
 
@@ -1159,24 +1077,29 @@ PRCKeys *prc_keygen(const PRCParams *params,
     return keys;
 }
 
-
 /*
  * ================================================================
  * Encode
  * ================================================================
  */
 
-uint8_t *prc_encode(const PRCParams *params,
-                    const PRCEncKey *key,
-                    PRCRandom *random)
+uint8_t *
+ldpc_encode(const void *params_ptr,
+            const ZBPRC_EncKey *key,
+            ZBPRC_Random *random,
+            size_t *output_bits)
 {
-    if (!params ||
-        !key ||
-        !random)
+    const LDPCParams *params =
+        (const LDPCParams *)params_ptr;
+
+    if (params == NULL ||
+        key == NULL ||
+        random == NULL ||
+        output_bits == NULL)
         return NULL;
 
     /*
-     * s ← F₂^g
+     * s <- F_2^g
      */
     BitVector s =
         bitvector_alloc(params->g);
@@ -1184,7 +1107,7 @@ uint8_t *prc_encode(const PRCParams *params,
     random_bitvector(random, &s);
 
     /*
-     * e ← Ber(n, eta)
+     * e <- Ber(n, eta)
      */
     BitVector e =
         bitvector_alloc(params->n);
@@ -1220,7 +1143,7 @@ uint8_t *prc_encode(const PRCParams *params,
     }
 
     /*
-     * Return byte representation.
+     * Convert to packed byte representation.
      */
     size_t bytes =
         (params->n + 7) / 8;
@@ -1229,6 +1152,7 @@ uint8_t *prc_encode(const PRCParams *params,
         calloc(bytes, 1);
 
     if (result == NULL) {
+
         bitvector_free(&s);
         bitvector_free(&e);
         bitvector_free(&Gs);
@@ -1245,9 +1169,12 @@ uint8_t *prc_encode(const PRCParams *params,
 
             result[i >> 3] |=
                 (uint8_t)(
-                    1u << (i & 7));
+                    1u << (i & 7)
+                );
         }
     }
+
+    *output_bits = params->n;
 
     bitvector_free(&s);
     bitvector_free(&e);
@@ -1264,30 +1191,42 @@ uint8_t *prc_encode(const PRCParams *params,
  * ================================================================
  */
 
-int prc_decode(const PRCParams *params,
-               const PRCDecKey *key,
-               const uint8_t *c)
+int
+ldpc_decode(const void *params_ptr,
+            const ZBPRC_DecKey *key,
+            const uint8_t *ciphertext,
+            size_t ciphertext_bits)
 {
-    if (!params ||
-        !key ||
-        !c)
+    const LDPCParams *params =
+        (const LDPCParams *)params_ptr;
+
+    if (params == NULL ||
+        key == NULL ||
+        ciphertext == NULL)
         return 0;
 
     /*
-     * Convert byte representation of c to
-     * packed BitVector.
+     * This PRC produces exactly n bits.
      */
-    BitVector cv =
+    if (ciphertext_bits != params->n)
+        return 0;
+
+    /*
+     * Convert byte representation to BitVector.
+     */
+    BitVector c =
         bitvector_alloc(params->n);
 
     for (size_t i = 0;
          i < params->n;
          ++i) {
 
-        if (c[i >> 3] &
-            (uint8_t)(1u << (i & 7))) {
+        if (ciphertext[i >> 3] &
+            (uint8_t)(
+                1u << (i & 7)
+            )) {
 
-            bit_set(&cv, i, 1);
+            bit_set(&c, i, 1);
         }
     }
 
@@ -1298,7 +1237,7 @@ int prc_decode(const PRCParams *params,
         bitvector_alloc(params->r);
 
     sparse_p_mul(&key->P,
-                 &cv,
+                 &c,
                  &Pc);
 
     /*
@@ -1331,7 +1270,7 @@ int prc_decode(const PRCParams *params,
     /*
      * Threshold:
      *
-     * (1/2 - r^(-1/4)) r
+     *     (1/2 - r^(-1/4)) r
      */
     double threshold =
         (0.5 -
@@ -1342,7 +1281,7 @@ int prc_decode(const PRCParams *params,
     int result =
         ((double)weight < threshold);
 
-    bitvector_free(&cv);
+    bitvector_free(&c);
     bitvector_free(&Pc);
     bitvector_free(&Pz);
 
@@ -1352,180 +1291,31 @@ int prc_decode(const PRCParams *params,
 
 /*
  * ================================================================
- * Cleanup
+ * LDPC zero-bit PRC instantiation
  * ================================================================
  */
 
-void prc_free_keys(PRCKeys *keys)
+ZBPRC
+ldpc_zbprc(const LDPCParams *params)
 {
-    if (!keys)
-        return;
+    ZBPRC prc = {
+        .params = params,
 
-    if (keys->enc) {
+        .keygen =
+            ldpc_keygen,
 
-        packed_g_free(&keys->enc->G);
-        bitvector_free(&keys->enc->z);
+        .encode =
+            ldpc_encode,
 
-        free(keys->enc);
-    }
+        .decode =
+            ldpc_decode,
 
-    if (keys->dec) {
+        .free_enc_key =
+            ldpc_free_enc_key,
 
-        sparse_p_free(&keys->dec->P);
-        bitvector_free(&keys->dec->z);
+        .free_dec_key =
+            ldpc_free_dec_key
+    };
 
-        free(keys->dec);
-    }
-
-    free(keys);
-}
-
-/*
- * ================================================================
- * Debug / inspection output
- * ================================================================
- */
-
-void prc_print_enc_key(const PRCParams *params,
-                       const PRCEncKey *key)
-{
-    printf("=== Encryption Key ===\n");
-
-    printf("G (%zu x %zu):\n",
-           params->n,
-           params->g);
-
-    /*
-     * Print G row-by-row, so that the output corresponds
-     * directly to the mathematical matrix.
-     */
-    for (size_t i = 0;
-         i < params->n;
-         ++i) {
-
-        for (size_t j = 0;
-             j < params->g;
-             ++j) {
-
-            putchar(
-                bit_get(&key->G.columns[j], i)
-                ? '1'
-                : '0'
-            );
-        }
-
-        putchar('\n');
-    }
-
-    printf("z (%zu bits):\n",
-           params->n);
-
-    for (size_t i = 0;
-         i < params->n;
-         ++i) {
-
-        putchar(
-            bit_get(&key->z, i)
-            ? '1'
-            : '0'
-        );
-    }
-
-    putchar('\n');
-}
-
-
-void prc_print_dec_key(const PRCParams *params,
-                       const PRCDecKey *key)
-{
-    printf("=== Decryption Key ===\n");
-
-    printf("P (%zu x %zu), row weight = %zu:\n",
-           params->r,
-           params->n,
-           params->t);
-
-    /*
-     * Print P as a complete binary matrix.
-     *
-     * This is intentionally an O(rn) debug operation;
-     * the actual implementation stores P sparsely.
-     */
-    for (size_t row = 0;
-         row < params->r;
-         ++row) {
-
-        size_t sparse_index = 0;
-
-        for (size_t col = 0;
-             col < params->n;
-             ++col) {
-
-            int set = 0;
-
-            /*
-             * Since P is sparse, only t positions need
-             * to be checked.
-             */
-            for (size_t j = 0;
-                 j < params->t;
-                 ++j) {
-
-                if (key->P.positions[
-                        row * params->t + j
-                    ] == col) {
-
-                    set = 1;
-                    break;
-                }
-            }
-
-            putchar(set ? '1' : '0');
-
-            if (set)
-                ++sparse_index;
-        }
-
-        putchar('\n');
-    }
-
-    printf("z (%zu bits):\n",
-           params->n);
-
-    for (size_t i = 0;
-         i < params->n;
-         ++i) {
-
-        putchar(
-            bit_get(&key->z, i)
-            ? '1'
-            : '0'
-        );
-    }
-
-    putchar('\n');
-}
-
-
-void prc_print_codeword(const PRCParams *params,
-                        const uint8_t *c)
-{
-    printf("=== Codeword ===\n");
-
-    printf("c (%zu bits):\n",
-           params->n);
-
-    for (size_t i = 0;
-         i < params->n;
-         ++i) {
-
-        putchar(
-            (c[i >> 3] &
-             (uint8_t)(1u << (i & 7)))
-            ? '1'
-            : '0'
-        );
-    }
-
-    putchar('\n');
+    return prc;
 }

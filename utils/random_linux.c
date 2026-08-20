@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 
+#include "random.h"
 
 #include <sys/random.h>
 #include <errno.h>

@@ -127,7 +127,7 @@ int main(void)
     }
 
     printf(
-        "Encoded %zu bits.\n",
+        "Encodedd %zu bits.\n",
         ciphertext_bits
     );
 
@@ -137,7 +137,7 @@ int main(void)
      * ------------------------------------------------------------
      */
 
-    printf("decoding started");
+    printf("decoding started\n");
 
     int result =
         prc_0_pp_decode(

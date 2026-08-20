@@ -824,7 +824,7 @@ int prc_0_pp_decode(
     size_t received_bits)
 {
 
-    printf("p0a");
+    printf("p0a\n");
 
     if (params == NULL ||
         key == NULL ||
@@ -839,7 +839,7 @@ int prc_0_pp_decode(
     const size_t n = key->n;
     const uint64_t q = key->q;
 
-    printf("p0b");
+    printf("p0b\n");
 
     const size_t log_n =
         prc_0_pp_log2_power_of_two((uint64_t)n);
@@ -854,7 +854,7 @@ int prc_0_pp_decode(
         received_bits < ell)
         return 0;
 
-    printf("p0c");
+    printf("p0c\n");
     /*
      * Allocate n lists. Each list has capacity L_max.
      *
@@ -877,7 +877,7 @@ int prc_0_pp_decode(
         return 0;
     }
 
-    printf("p1");
+    printf("p1\n");
 
     for (size_t i = 0; i < n; ++i) {
         if (params->L_max >
@@ -906,7 +906,7 @@ int prc_0_pp_decode(
         }
     }
 
-    printf("p2");
+    printf("p2\n");
 
     /*
      * The decoder in Algorithm 1 scans every contiguous
@@ -915,6 +915,12 @@ int prc_0_pp_decode(
     for (size_t pos = 0;
          pos + ell <= received_bits;
          ++pos) {
+
+        printf(
+        "index %zu.\n",
+            pos
+        );
+
 
         for (size_t i = 0; i < n; ++i) {
 
@@ -958,7 +964,7 @@ int prc_0_pp_decode(
         }
     }
 
-    printf("p3");
+    printf("p3\n");
 
     /*
      * Apply the OTP:
