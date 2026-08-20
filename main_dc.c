@@ -19,7 +19,7 @@ static const LDPCParams params = {
     .r   = 64,
     .g   = 32,
     .t   = 4,
-    .eta = 0.01
+    .eta = 0.05
 };
 
 
