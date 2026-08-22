@@ -1,5 +1,5 @@
 #include "prcs/zerobit/implementations/prc_ldpc.h"
-#include "prcs/zerobit/implementations/prc_dc.h"
+#include "prcs/multibit/implementations/prc1_adapt.h"
 #include "utils/random.h"
 
 #include <stdio.h>
@@ -15,11 +15,11 @@
  */
 
 static const LDPCParams params = {
-    .n   = 128,
-    .r   = 64,
-    .g   = 32,
-    .t   = 4,
-    .eta = 0.05
+    .n   = 1024,
+    .r   = 512,
+    .g   = 256,
+    .t   = 10,
+    .eta = 0.01
 };
 
 
@@ -131,7 +131,7 @@ load_codeword(const char *filename,
             ch != '1') {
 
             fprintf(stderr,
-                    "Invalid character in dc.txt: '%c'\n",
+                    "Invalid character in 1a.txt: '%c'\n",
                     ch);
 
             free(codeword);
@@ -213,8 +213,8 @@ print_usage(void)
 {
     printf(
         "Commands:\n"
-        "  encode   - encode and write to dc.txt\n"
-        "  decode   - read from dc.txt and decode\n"
+        "  encode   - encode and write to 1a.txt\n"
+        "  decode   - read from 1a.txt and decode\n"
         "  help\n"
         "  quit\n"
     );
@@ -230,74 +230,61 @@ print_usage(void)
 int
 main(void)
 {
-    /*
-     * ============================================================
-     * Instantiate LDPC zero-bit PRC
-     * ============================================================
-     */
+            /*
+        * ============================================================
+        * Instantiate LDPC zero-bit PRC
+        * ============================================================
+        */
 
-    ZBPRC underlying =
-        ldpc_zbprc(&params);
-
-
-    /*
-     * ============================================================
-     * Randomness
-     * ============================================================
-     */
-
-    ZBPRC_Random random = {
-        .rng = linux_secure_random,
-        .ctx = NULL
-    };
+        ZBPRC underlying =
+            ldpc_zbprc(&params);
 
 
-    /*
-     * ============================================================
-     * Instantiate DC zero-bit PRC
-     * ============================================================
-     */
+        /*
+        * ============================================================
+        * Randomness
+        * ============================================================
+        */
 
-    PRCDC_Params dc_params = {
-        .k = params.n,
-        .T = 211,
-        .underlying = &underlying
-    };
-
-    ZBPRC prc =
-        prc_dc_create(&dc_params);
+        MBPRC_Random random = {
+            .rng = linux_secure_random,
+            .ctx = NULL
+        };
 
 
-    /*
-     * ============================================================
-     * Key generation
-     * ============================================================
-     */
+        /*
+        * ============================================================
+        * Instantiate 1-bit adaptive PRC
+        * ============================================================
+        */
 
-    ZBPRC_Keys *keys =
-        zbprc_keygen(
-            &prc,
-            &random
-        );
+        PRC1AdaptParams adapt_params = {
+            .underlying_prc = &underlying
+        };
 
-    if (keys == NULL) {
+        MBPRC prc =
+            prc1_adapt_create(&adapt_params);
 
-        fprintf(stderr,
-                "Key generation failed.\n");
 
-        return EXIT_FAILURE;
-    }
+        /*
+        * ============================================================
+        * Key generation
+        * ============================================================
+        */
+
+        MBPRC_Keys *keys =
+            mbprc_keygen(
+                &prc,
+                &random
+            );
 
 
     printf(
-        "DC zero-bit PRC initialized.\n"
+    "1-bit adaptive PRC initialized.\n"
     );
 
-    printf(
-        "DC ciphertext length for encode: "
-        "%zu bits\n",
-        dc_params.k * dc_params.T
-    );
+
+
 
     print_usage();
 
@@ -369,48 +356,88 @@ main(void)
          * --------------------------------------------------------
          */
 
-        if (strcmp(line, "encode") == 0) {
+        if (strncmp(line, "encode", 6) == 0 &&
+    (line[6] == ' ' || line[6] == '\0')) {
 
-            size_t output_bits = 0;
+    /*
+     * Skip whitespace after "encode".
+     */
+    char *argument =
+        line + 6;
 
-            uint8_t *codeword =
-                zbprc_encode(
-                    &prc,
-                    keys->enc,
-                    &random,
-                    &output_bits
-                );
-
-            if (codeword == NULL) {
-
-                fprintf(stderr,
-                        "Encoding failed.\n");
-
-                continue;
-            }
-
-            if (!save_codeword(
-                    "dc.txt",
-                    codeword,
-                    output_bits)) {
-
-                fprintf(stderr,
-                        "Failed to write dc.txt.\n");
-
-            } else {
-
-                printf(
-                    "Encoded %zu bits to dc.txt.\n",
-                    output_bits
-                );
-            }
-
-            free(codeword);
-
-            continue;
-        }
+    while (*argument == ' ')
+        ++argument;
 
 
+    /*
+     * Require exactly one message bit.
+     */
+    if ((argument[0] != '0' &&
+         argument[0] != '1') ||
+        argument[1] != '\0') {
+
+        fprintf(
+            stderr,
+            "Usage: encode 0 | encode 1\n"
+        );
+
+        continue;
+    }
+
+
+    /*
+     * The PRC uses a packed one-bit message.
+     */
+    uint8_t message[1] = {
+        argument[0] == '1' ? 1u : 0u
+    };
+
+    size_t output_bits = 0;
+
+    uint8_t *codeword =
+        mbprc_encode(
+            &prc,
+            keys->enc,
+            message,
+            1,
+            &random,
+            &output_bits
+        );
+
+    if (codeword == NULL) {
+
+        fprintf(
+            stderr,
+            "Encoding failed.\n"
+        );
+
+        continue;
+    }
+
+    if (!save_codeword(
+            "1a.txt",
+            codeword,
+            output_bits)) {
+
+        fprintf(
+            stderr,
+            "Failed to write 1a.txt.\n"
+        );
+
+    } else {
+
+        printf(
+            "Encoded message %c (%zu ciphertext bits) "
+            "to 1a.txt.\n",
+            argument[0],
+            output_bits
+        );
+    }
+
+    free(codeword);
+
+    continue;
+}
         /*
          * --------------------------------------------------------
          * decode
@@ -419,49 +446,65 @@ main(void)
 
         if (strcmp(line, "decode") == 0) {
 
-            size_t ciphertext_bits = 0;
+    size_t ciphertext_bits = 0;
 
-            uint8_t *codeword =
-                load_codeword(
-                    "dc.txt",
-                    &ciphertext_bits
-                );
+    uint8_t *codeword =
+        load_codeword(
+            "1a.txt",
+            &ciphertext_bits
+        );
 
-            if (codeword == NULL) {
+    if (codeword == NULL) {
 
-                fprintf(stderr,
-                        "Failed to read dc.txt.\n");
+        fprintf(
+            stderr,
+            "Failed to read 1a.txt.\n"
+        );
 
-                continue;
-            }
+        continue;
+    }
 
-            printf(
-                "Read %zu bits from dc.txt.\n",
-                ciphertext_bits
-            );
-
-
-            /*
-             * Pass the actual number of bits in the file.
-             *
-             * The DC PRC supports arbitrary ciphertext lengths,
-             * so we deliberately do NOT require k*T here.
-             */
-            int result =
-                zbprc_decode(
-                    &prc,
-                    keys->dec,
-                    codeword
-                );
-
-            printf("%d\n", result);
-
-            free(codeword);
-
-            continue;
-        }
+    printf(
+        "Read %zu bits from 1a.txt.\n",
+        ciphertext_bits
+    );
 
 
+    /*
+     * The PRC has a one-bit message.
+     */
+    uint8_t message[1] = {0};
+
+    size_t message_bits = 0;
+
+    int result =
+        mbprc_decode(
+            &prc,
+            keys->dec,
+            codeword,
+            ciphertext_bits,
+            message,
+            &message_bits
+        );
+
+    if (result == 1) {
+
+        printf(
+            "Decoded: %u\n",
+            message[0] & 1u
+        );
+
+    } else {
+
+        printf(
+            "Decoding failed.\n"
+        );
+    }
+
+    free(codeword);
+
+    continue;
+}
         /*
          * --------------------------------------------------------
          * Unknown command
@@ -483,7 +526,7 @@ main(void)
      * ============================================================
      */
 
-    zbprc_free_keys(
+    mbprc_free_keys(
         &prc,
         keys
     );

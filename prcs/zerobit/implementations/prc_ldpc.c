@@ -934,6 +934,13 @@ void ldpc_free_dec_key(const void *params, ZBPRC_DecKey *key)
     free(key);
 }
 
+size_t
+ldpc_blocksize(const void *params_ptr){
+    const LDPCParams *params =
+        (const LDPCParams *)params_ptr;
+    return params->n;
+}
+
 
 /*
  * ================================================================
@@ -1206,10 +1213,11 @@ ldpc_decode(const void *params_ptr,
         return 0;
 
     /*
-     * This PRC produces exactly n bits.
+     * size of ciphertext must have size n
      */
     if (ciphertext_bits != params->n)
         return 0;
+
 
     /*
      * Convert byte representation to BitVector.
@@ -1300,6 +1308,8 @@ ldpc_zbprc(const LDPCParams *params)
 {
     ZBPRC prc = {
         .params = params,
+
+        .blocksize = ldpc_blocksize,
 
         .keygen =
             ldpc_keygen,

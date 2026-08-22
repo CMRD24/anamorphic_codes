@@ -304,8 +304,7 @@ main(void)
                 zbprc_decode(
                     &prc,
                     keys->dec,
-                    codeword,
-                    params.n
+                    codeword
                 );
 
             printf("%d\n",

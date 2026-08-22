@@ -639,7 +639,7 @@ prc_dc_decode(
             params->underlying->params,
             key->inner,
             inner,
-            k
+            inner_bytes //TODO: *8 ?
         );
 
     free(inner);

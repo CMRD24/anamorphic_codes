@@ -59,6 +59,10 @@ typedef struct {
     const void *params;
 
 
+    size_t (*blocksize)(
+        const void *params
+    );
+
     /*
      * ------------------------------------------------------------
      * Key generation
@@ -134,6 +138,15 @@ typedef struct {
  * Convenience functions
  * ================================================================
  */
+
+static inline size_t
+zbprc_blocksize(
+    const ZBPRC *prc)
+{
+    return prc->blocksize(
+        prc->params
+    );
+}
 
 static inline ZBPRC_Keys *
 zbprc_keygen(

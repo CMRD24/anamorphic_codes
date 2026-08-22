@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 /*
  * ================================================================
@@ -73,19 +74,10 @@ typedef struct {
     const void *params;
 
 
-    /*
-     * ------------------------------------------------------------
-     * Message size
-     * ------------------------------------------------------------
-     *
-     * Returns the number of message bits supported by this PRC.
-     *
-     * The message length is fixed for a given parameter set.
-     */
-    size_t (*message_bits)(
+
+    size_t (*blocksize)(
         const void *params
     );
-
 
     /*
      * ------------------------------------------------------------
@@ -106,8 +98,6 @@ typedef struct {
      * ------------------------------------------------------------
      *
      * Encodes a message.
-     *
-     * message_bits must equal message_bits(params).
      *
      * Returns a newly allocated packed ciphertext.
      *
@@ -140,8 +130,6 @@ typedef struct {
      *
      * On success, the decoded message is written to message_out.
      *
-     * message_out must provide enough space for
-     * message_bits(params) bits.
      */
     int (*decode)(
         const void *params,
@@ -160,10 +148,12 @@ typedef struct {
      */
 
     void (*free_enc_key)(
+        const void *params,
         MBPRC_EncKey *key
     );
 
     void (*free_dec_key)(
+        const void *params,
         MBPRC_DecKey *key
     );
 
@@ -177,12 +167,13 @@ typedef struct {
  */
 
 static inline size_t
-mbprc_message_bits(
+mbprc_blocksize(
     const MBPRC *prc)
 {
-    return prc->message_bits(prc->params);
+    return prc->blocksize(
+        prc->params
+    );
 }
-
 
 static inline MBPRC_Keys *
 mbprc_keygen(
@@ -205,6 +196,7 @@ mbprc_encode(
     MBPRC_Random *random,
     size_t *output_bits)
 {
+    printf("mm1\n");
     return prc->encode(
         prc->params,
         key,
@@ -241,7 +233,7 @@ mbprc_free_enc_key(
     const MBPRC *prc,
     MBPRC_EncKey *key)
 {
-    prc->free_enc_key(key);
+    prc->free_enc_key(prc->params, key);
 }
 
 
@@ -250,7 +242,7 @@ mbprc_free_dec_key(
     const MBPRC *prc,
     MBPRC_DecKey *key)
 {
-    prc->free_dec_key(key);
+    prc->free_dec_key(prc->params, key);
 }
 
 
@@ -263,10 +255,10 @@ mbprc_free_keys(
         return;
 
     if (keys->enc)
-        prc->free_enc_key(keys->enc);
+        prc->free_enc_key(prc->params, keys->enc);
 
     if (keys->dec)
-        prc->free_dec_key(keys->dec);
+        prc->free_dec_key(prc->params, keys->dec);
 
     free(keys);
 }
