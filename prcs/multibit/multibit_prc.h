@@ -6,22 +6,24 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#include "../../utils/random.h"
+
 /*
  * ================================================================
  * Randomness
  * ================================================================
  */
 
-typedef int (*MBPRC_Rng)(
-    void *ctx,
-    uint8_t *out,
-    size_t len
-);
+// typedef int (*MBPRC_Rng)(
+//     void *ctx,
+//     uint8_t *out,
+//     size_t len
+// );
 
-typedef struct {
-    MBPRC_Rng rng;
-    void *ctx;
-} MBPRC_Random;
+// typedef struct {
+//     MBPRC_Rng rng;
+//     void *ctx;
+// } MBPRC_Random;
 
 
 /*
@@ -79,6 +81,7 @@ typedef struct {
         const void *params
     );
 
+    
     /*
      * ------------------------------------------------------------
      * Key generation
@@ -88,7 +91,7 @@ typedef struct {
      */
     MBPRC_Keys *(*keygen)(
         const void *params,
-        MBPRC_Random *random
+        RandomnessSource *random
     );
 
 
@@ -111,7 +114,7 @@ typedef struct {
         const MBPRC_EncKey *key,
         const uint8_t *message,
         size_t message_bits,
-        MBPRC_Random *random,
+        RandomnessSource *random,
         size_t *output_bits
     );
 
@@ -175,10 +178,11 @@ mbprc_blocksize(
     );
 }
 
+
 static inline MBPRC_Keys *
 mbprc_keygen(
     const MBPRC *prc,
-    MBPRC_Random *random)
+    RandomnessSource *random)
 {
     return prc->keygen(
         prc->params,
@@ -193,7 +197,7 @@ mbprc_encode(
     const MBPRC_EncKey *key,
     const uint8_t *message,
     size_t message_bits,
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t *output_bits)
 {
     printf("mm1\n");

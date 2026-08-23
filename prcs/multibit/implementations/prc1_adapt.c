@@ -34,14 +34,14 @@ struct MBPRC_DecKey {
  * Randomness adapter
  * ================================================================
  *
- * ZBPRC_Random and MBPRC_Random have the same shape, but they are
+ * RandomnessSource and RandomnessSource have the same shape, but they are
  * distinct C types. We therefore create a small adapter instead of
  * casting function pointers.
  */
 
 typedef struct {
 
-    MBPRC_Random *random;
+    RandomnessSource *random;
 
 } RandomAdapterCtx;
 
@@ -81,7 +81,7 @@ random_adapter(
 static MBPRC_Keys *
 prc1_adapt_keygen(
     const void *params,
-    MBPRC_Random *random)
+    RandomnessSource *random)
 {
     const PRC1AdaptParams *adapt_params =
         (const PRC1AdaptParams *)params;
@@ -89,7 +89,7 @@ prc1_adapt_keygen(
     const ZBPRC *prc;
 
     RandomAdapterCtx random_ctx;
-    ZBPRC_Random zb_random;
+    RandomnessSource zb_random;
 
     ZBPRC_Keys *keys0 = NULL;
     ZBPRC_Keys *keys1 = NULL;
@@ -220,7 +220,7 @@ prc1_adapt_encode(
     const MBPRC_EncKey *key,
     const uint8_t *message,
     size_t message_bits,
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t *output_bits)
 {
     const PRC1AdaptParams *adapt_params =
@@ -229,7 +229,7 @@ prc1_adapt_encode(
     const ZBPRC *prc;
 
     RandomAdapterCtx random_ctx;
-    ZBPRC_Random zb_random;
+    RandomnessSource zb_random;
 
     const ZBPRC_EncKey *selected_key;
 

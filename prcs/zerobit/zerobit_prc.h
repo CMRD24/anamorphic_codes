@@ -5,22 +5,24 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "../../utils/random.h"
+
 /*
  * ================================================================
  * Randomness
  * ================================================================
  */
 
-typedef int (*ZBPRC_Rng)(
-    void *ctx,
-    uint8_t *out,
-    size_t len
-);
+// typedef int (*ZBPRC_Rng)(
+//     void *ctx,
+//     uint8_t *out,
+//     size_t len
+// );
 
-typedef struct {
-    ZBPRC_Rng rng;
-    void *ctx;
-} ZBPRC_Random;
+// typedef struct {
+//     ZBPRC_Rng rng;
+//     void *ctx;
+// } ZBPRC_Random;
 
 
 /*
@@ -63,6 +65,7 @@ typedef struct {
         const void *params
     );
 
+
     /*
      * ------------------------------------------------------------
      * Key generation
@@ -72,7 +75,7 @@ typedef struct {
      */
     ZBPRC_Keys *(*keygen)(
         const void *params,
-        ZBPRC_Random *random
+        RandomnessSource *random
     );
 
 
@@ -89,7 +92,7 @@ typedef struct {
     uint8_t *(*encode)(
         const void *params,
         const ZBPRC_EncKey *key,
-        ZBPRC_Random *random,
+        RandomnessSource *random,
         size_t *output_bits
     );
 
@@ -148,10 +151,12 @@ zbprc_blocksize(
     );
 }
 
+
+
 static inline ZBPRC_Keys *
 zbprc_keygen(
     const ZBPRC *prc,
-    ZBPRC_Random *random)
+    RandomnessSource *random)
 {
     return prc->keygen(
         prc->params,
@@ -163,7 +168,7 @@ static inline uint8_t *
 zbprc_encode(
     const ZBPRC *prc,
     const ZBPRC_EncKey *key,
-    ZBPRC_Random *random,
+    RandomnessSource *random,
     size_t *output_bits)
 {
     return prc->encode(

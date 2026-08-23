@@ -43,3 +43,12 @@ int linux_secure_random(void *ctx,
 
     return 1;
 }
+
+
+RandomnessSource linux_randomness(){
+    RandomnessSource rand = {
+        .ctx = NULL,
+        .rng = linux_secure_random
+    };
+    return rand;
+}

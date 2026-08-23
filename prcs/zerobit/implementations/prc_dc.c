@@ -106,7 +106,7 @@ prc_dc_majority(
 
 static int
 random_bytes(
-    ZBPRC_Random *random,
+    RandomnessSource *random,
     uint8_t *out,
     size_t len)
 {
@@ -144,7 +144,7 @@ sample_majority_slice(
     size_t output_bit_offset,
     size_t T,
     uint8_t majority,
-    ZBPRC_Random *random)
+    RandomnessSource *random)
 {
     if (output == NULL ||
         T == 0 ||
@@ -278,7 +278,7 @@ prc_dc_valid_params(
 static ZBPRC_Keys *
 prc_dc_keygen(
     const void *params_ptr,
-    ZBPRC_Random *random)
+    RandomnessSource *random)
 {
     const PRCDC_Params *params =
         (const PRCDC_Params *)params_ptr;
@@ -410,7 +410,7 @@ static uint8_t *
 prc_dc_encode(
     const void *params_ptr,
     const ZBPRC_EncKey *base_key,
-    ZBPRC_Random *random,
+    RandomnessSource *random,
     size_t *output_bits)
 {
     const PRCDC_Params *params =

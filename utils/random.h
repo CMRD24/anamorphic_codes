@@ -4,10 +4,25 @@
 #include <stddef.h>
 #include <stdint.h>
 
-int linux_secure_random(
-    void *ctx,
+
+typedef struct {
+
+    void *ctx;
+
+    /*
+    return 1 on success, 0 on failue
+    */
+    int (*rng)(
+        void *ctx,
     uint8_t *out,
-    size_t len
-);
+    size_t len);
+
+
+} RandomnessSource;
+
+
+
+RandomnessSource linux_randomness(void);
+
 
 #endif /* RANDOM_H */

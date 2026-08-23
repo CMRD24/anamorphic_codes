@@ -1,187 +1,46 @@
-#include "csprg_sodium.h"
-
-#include <stddef.h>
+#include <sodium.h>
 #include <stdint.h>
-#include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
-#include <sodium.h>
+#include "random.h"
+
+#define PRNG_BLOCK_BYTES 64
+
+typedef struct {
+    uint8_t *seed;
+    size_t seed_bits;
+    uint64_t counter;
+} SecurePseudorandomCtx;
 
 
 /*
- * ================================================================
- * Seed hashing
- * ================================================================
+ * Generate one deterministic block from:
  *
- * libsodium's deterministic random generator requires a fixed-size
- * seed (randombytes_SEEDBYTES, currently 32 bytes).
- *
- * Our CSPRG interface accepts arbitrary-length seeds.
- *
- * Therefore:
- *
- *     arbitrary seed
- *          |
- *          v
- *       BLAKE2b
- *          |
- *          v
- *       256-bit seed
- *          |
- *          v
- * randombytes_buf_deterministic()
- *
- * The seed length is included in the hash input so that different
- * bit strings with different lengths cannot accidentally be treated
- * as the same seed.
- * ================================================================
+ *     seed || counter
  */
-
 static int
-sodium_generate(
+generate_block(
     const uint8_t *seed,
     size_t seed_bits,
-    uint8_t *output,
-    size_t output_len)
+    uint64_t counter,
+    uint8_t *out)
 {
     /*
-     * Validate arguments.
+     * Include the counter in the input.
      */
-    if (seed_bits > 0 && seed == NULL)
-        return -1;
+    uint8_t counter_bytes[8];
 
-    if (output_len > 0 && output == NULL)
-        return -1;
+    for (size_t i = 0; i < 8; ++i)
+        counter_bytes[i] =
+            (uint8_t)(counter >> (8 * i));
 
     /*
-     * libsodium must have been initialized.
-     */
-    if (sodium_init() < 0)
-        return -1;
-
-
-    /*
-     * ------------------------------------------------------------
-     * Calculate the number of bytes containing the seed.
-     * ------------------------------------------------------------
-     */
-
-    const size_t seed_len =
-        (seed_bits + 7) / 8;
-
-
-    /*
-     * ------------------------------------------------------------
-     * Construct a canonical representation of the seed.
-     * ------------------------------------------------------------
+     * Hash:
      *
-     * We hash:
+     *     domain || seed_bits || seed || counter
      *
-     *     domain || seed_bits || seed
-     *
-     * where the unused bits of the final seed byte are zeroed.
-     *
-     * This ensures that, for example:
-     *
-     *     seed_bits = 5
-     *
-     * only the first five bits of seed[0] matter.
-     * ------------------------------------------------------------
-     */
-
-    uint8_t *canonical_seed = NULL;
-
-    if (seed_len > 0) {
-
-        canonical_seed =
-            malloc(seed_len);
-
-        if (!canonical_seed)
-            return -1;
-
-        memcpy(
-            canonical_seed,
-            seed,
-            seed_len
-        );
-
-        /*
-         * Clear unused bits in the final byte.
-         *
-         * Bits are interpreted in the same packed representation
-         * as the rest of the project:
-         *
-         *     bit 0 = least significant bit of byte 0.
-         */
-        if (seed_bits % 8 != 0) {
-
-            const unsigned used_bits =
-                (unsigned)(seed_bits % 8);
-
-            const uint8_t mask =
-                (uint8_t)((1u << used_bits) - 1u);
-
-            canonical_seed[seed_len - 1] &= mask;
-        }
-    }
-
-
-    /*
-     * ------------------------------------------------------------
-     * Hash the arbitrary-length seed into a 256-bit seed.
-     * ------------------------------------------------------------
-     *
-     * We use BLAKE2b-256.
-     *
-     * The seed length is encoded explicitly as a uint64_t.
-     *
-     * Since this is only a domain-separation / seed-expansion
-     * operation, little-endian encoding is sufficient as long as
-     * it is deterministic.
-     * ------------------------------------------------------------
-     */
-
-    uint8_t hash_input_prefix[16];
-
-    /*
-     * Domain separator:
-     *
-     * "CSPRG-SODIUM"
-     *
-     * followed by zero padding.
-     */
-    static const uint8_t domain[] = {
-        'C', 'S', 'P', 'R', 'G',
-        '-', 'S', 'O', 'D', 'I', 'U', 'M'
-    };
-
-    memset(
-        hash_input_prefix,
-        0,
-        sizeof(hash_input_prefix)
-    );
-
-    memcpy(
-        hash_input_prefix,
-        domain,
-        sizeof(domain)
-    );
-
-    /*
-     * Store seed_bits as little-endian uint64_t.
-     */
-    uint64_t bits = (uint64_t)seed_bits;
-
-    for (size_t i = 0; i < 8; ++i) {
-        hash_input_prefix[8 + i] =
-            (uint8_t)(bits >> (8 * i));
-    }
-
-    uint8_t derived_seed[randombytes_SEEDBYTES];
-
-    /*
-     * Use the streaming BLAKE2b API so that the implementation
-     * does not need to construct one large contiguous buffer.
+     * using BLAKE2b-512.
      */
     crypto_generichash_state state;
 
@@ -189,88 +48,157 @@ sodium_generate(
             &state,
             NULL,
             0,
-            randombytes_SEEDBYTES) != 0) {
-
-        free(canonical_seed);
+            PRNG_BLOCK_BYTES) != 0)
         return -1;
-    }
+
+    static const uint8_t domain[] =
+        "CSPRG-SODIUM-STREAM";
 
     if (crypto_generichash_update(
             &state,
-            hash_input_prefix,
-            sizeof(hash_input_prefix)) != 0) {
-
-        free(canonical_seed);
+            domain,
+            sizeof(domain) - 1) != 0)
         return -1;
-    }
+
+    uint64_t bits = (uint64_t)seed_bits;
+    uint8_t bits_bytes[8];
+
+    for (size_t i = 0; i < 8; ++i)
+        bits_bytes[i] =
+            (uint8_t)(bits >> (8 * i));
+
+    if (crypto_generichash_update(
+            &state,
+            bits_bytes,
+            sizeof(bits_bytes)) != 0)
+        return -1;
+
+    /*
+     * Seed is byte-packed, so only complete bytes
+     * are passed here.
+     */
+    size_t seed_len =
+        (seed_bits + 7) / 8;
 
     if (seed_len > 0) {
 
         if (crypto_generichash_update(
                 &state,
-                canonical_seed,
-                seed_len) != 0) {
-
-            free(canonical_seed);
+                seed,
+                seed_len) != 0)
             return -1;
-        }
     }
 
-    if (crypto_generichash_final(
+    if (crypto_generichash_update(
             &state,
-            derived_seed,
-            sizeof(derived_seed)) != 0) {
-
-        free(canonical_seed);
+            counter_bytes,
+            sizeof(counter_bytes)) != 0)
         return -1;
+
+    return crypto_generichash_final(
+        &state,
+        out,
+        PRNG_BLOCK_BYTES
+    );
+}
+
+
+int
+secure_pseudorandom(
+    void *ctx,
+    uint8_t *out,
+    size_t len)
+{
+    SecurePseudorandomCtx *prng =
+        (SecurePseudorandomCtx *)ctx;
+
+    if (prng == NULL)
+        return 0;
+
+    if (len > 0 && out == NULL)
+        return 0;
+
+    while (len > 0) {
+
+        uint8_t block[PRNG_BLOCK_BYTES];
+
+        if (generate_block(
+                prng->seed,
+                prng->seed_bits,
+                prng->counter,
+                block) != 0)
+            return 0;
+
+        size_t take = len;
+
+        if (take > PRNG_BLOCK_BYTES)
+            take = PRNG_BLOCK_BYTES;
+
+        memcpy(out, block, take);
+
+        out += take;
+        len -= take;
+
+        prng->counter++;
     }
 
-    free(canonical_seed);
-
-
-    /*
-     * ------------------------------------------------------------
-     * Generate the pseudorandom output.
-     * ------------------------------------------------------------
-     */
-
-    randombytes_buf_deterministic(
-        output,
-        output_len,
-        derived_seed
-    );
-
-    /*
-     * Clear the derived seed from memory.
-     */
-    sodium_memzero(
-        derived_seed,
-        sizeof(derived_seed)
-    );
-
-    return 0;
+    return 1;
 }
 
-
-/*
- * ================================================================
- * CSPRG implementation
- * ================================================================
- */
-
-static const CSPRG sodium_csprg = {
-    .generate = sodium_generate
-};
-
-
-/*
- * ================================================================
- * Public interface
- * ================================================================
- */
-
-const CSPRG *
-csprg_sodium(void)
+void
+csprg_randomness_free(
+    RandomnessSource *random)
 {
-    return &sodium_csprg;
+    if (random == NULL || random->ctx == NULL)
+        return;
+
+    SecurePseudorandomCtx *ctx =
+        random->ctx;
+
+    free(ctx->seed);
+    free(ctx);
+
+    random->ctx = NULL;
+    random->rng = NULL;
 }
+
+
+RandomnessSource
+csprg_randomness(
+    const uint8_t *seed,
+    size_t seed_length)
+{
+    SecurePseudorandomCtx *ctx =
+        malloc(sizeof(*ctx));
+
+    if (ctx == NULL)
+        return (RandomnessSource) {
+            .ctx = NULL,
+            .rng = NULL
+        };
+
+    ctx->seed = malloc(seed_length);
+
+    if (seed_length > 0 && ctx->seed == NULL) {
+        free(ctx);
+        return (RandomnessSource) {
+            .ctx = NULL,
+            .rng = NULL
+        };
+    }
+
+    memcpy(
+        ctx->seed,
+        seed,
+        seed_length
+    );
+
+    ctx->seed_bits = seed_length * 8;
+    ctx->counter = 0;
+
+    return (RandomnessSource) {
+        .ctx = ctx,
+        .rng = secure_pseudorandom
+    };
+}
+

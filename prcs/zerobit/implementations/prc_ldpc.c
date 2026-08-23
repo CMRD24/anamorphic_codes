@@ -156,7 +156,7 @@ static size_t bitvector_weight(const BitVector *v)
  * ================================================================
  */
 
-static void random_bytes(ZBPRC_Random *random,
+static void random_bytes(RandomnessSource *random,
                          uint8_t *out,
                          size_t len)
 {
@@ -172,7 +172,7 @@ static void random_bytes(ZBPRC_Random *random,
 }
 
 
-static uint64_t random_u64(ZBPRC_Random *random)
+static uint64_t random_u64(RandomnessSource *random)
 {
     uint64_t x;
 
@@ -184,7 +184,7 @@ static uint64_t random_u64(ZBPRC_Random *random)
 }
 
 
-static uint8_t random_bit(ZBPRC_Random *random)
+static uint8_t random_bit(RandomnessSource *random)
 {
     return (uint8_t)(random_u64(random) & 1ULL);
 }
@@ -196,7 +196,7 @@ static uint8_t random_bit(ZBPRC_Random *random)
  * ================================================================
  */
 
-static void random_bitvector(ZBPRC_Random *random,
+static void random_bitvector(RandomnessSource *random,
                              BitVector *v)
 {
     for (size_t i = 0;
@@ -227,7 +227,7 @@ static void random_bitvector(ZBPRC_Random *random,
  */
 
 static void random_bernoulli_vector(
-    ZBPRC_Random *random,
+    RandomnessSource *random,
     BitVector *v,
     double eta)
 {
@@ -328,7 +328,7 @@ static void sparse_p_free(SparseP *P)
 }
 
 
-static size_t random_bounded(ZBPRC_Random *random,
+static size_t random_bounded(RandomnessSource *random,
                              size_t bound)
 {
     if (bound == 0)
@@ -370,7 +370,7 @@ static int sparse_row_contains(const SparseP *P,
 }
 
 
-static void sample_sparse_p(ZBPRC_Random *random,
+static void sample_sparse_p(RandomnessSource *random,
                             SparseP *P)
 {
     for (size_t row = 0;
@@ -950,7 +950,7 @@ ldpc_blocksize(const void *params_ptr){
 
 ZBPRC_Keys *
 ldpc_keygen(const void *params_ptr,
-            ZBPRC_Random *random)
+            RandomnessSource *random)
 {
     const LDPCParams *params =
         (const LDPCParams *)params_ptr;
@@ -1093,7 +1093,7 @@ ldpc_keygen(const void *params_ptr,
 uint8_t *
 ldpc_encode(const void *params_ptr,
             const ZBPRC_EncKey *key,
-            ZBPRC_Random *random,
+            RandomnessSource *random,
             size_t *output_bits)
 {
     const LDPCParams *params =

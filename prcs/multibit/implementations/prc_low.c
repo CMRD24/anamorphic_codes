@@ -85,44 +85,7 @@ bits_to_bytes(
 }
 
 
-/*
- * Convert MBPRC randomness to ZBPRC randomness.
- *
- * Both RNG interfaces have identical layouts and signatures,
- * but keeping the conversion explicit avoids depending on
- * typedef compatibility.
- */
 
-static int
-zb_rng_adapter(
-    void *ctx,
-    uint8_t *out,
-    size_t len)
-{
-    MBPRC_Random *random = ctx;
-
-    if (!random || !random->rng)
-        return 0;
-
-    return random->rng(
-        random->ctx,
-        out,
-        len
-    );
-}
-
-
-static ZBPRC_Random
-make_zb_random(
-    MBPRC_Random *random)
-{
-    ZBPRC_Random result;
-
-    result.rng = zb_rng_adapter;
-    result.ctx = random;
-
-    return result;
-}
 
 
 /*
@@ -133,7 +96,7 @@ make_zb_random(
 
 static int
 random_size_t(
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t *out)
 {
     uint8_t bytes[sizeof(size_t)];
@@ -175,7 +138,7 @@ random_size_t(
  */
 static int
 random_bounded(
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t bound,
     size_t *out)
 {
@@ -214,7 +177,7 @@ random_bounded(
  */
 static int
 sample_permutation(
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t *pi,
     size_t n)
 {
@@ -293,7 +256,7 @@ invert_permutation(
 
 static int
 fill_random_bits(
-    MBPRC_Random *random,
+    RandomnessSource *random,
     uint8_t *out,
     size_t bits)
 {
@@ -351,7 +314,7 @@ size_t prc_low_blocklength(const void *void_params)
 static MBPRC_Keys *
 prc_low_keygen(
     const void *void_params,
-    MBPRC_Random *random)
+    RandomnessSource *random)
 {
     const PRCLow_Params *params =
         void_params;
@@ -385,13 +348,11 @@ prc_low_keygen(
     size_t total_bits =
         blocksize_bits * blocks;
 
-    ZBPRC_Random zb_random =
-        make_zb_random(random);
 
     ZBPRC_Keys *underlying_keys =
         zbprc_keygen(
             params->underlying,
-            &zb_random
+            random
         );
 
     if (!underlying_keys)
@@ -519,7 +480,7 @@ prc_low_encode(
     const MBPRC_EncKey *void_key,
     const uint8_t *message,
     size_t message_bits,
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t *output_bits)
 {
     const PRCLow_Params *params =
@@ -579,9 +540,6 @@ prc_low_encode(
         return NULL;
     }
 
-    ZBPRC_Random zb_random =
-        make_zb_random(random);
-
 
     /*
      * Encode the ell message bits.
@@ -617,7 +575,7 @@ prc_low_encode(
                 zbprc_encode(
                     params->underlying,
                     key->underlying_key,
-                    &zb_random,
+                    random,
                     &encoded_bits
                 );
 
@@ -677,7 +635,7 @@ prc_low_encode(
             zbprc_encode(
                 params->underlying,
                 key->underlying_key,
-                &zb_random,
+                random,
                 &encoded_bits
             );
 

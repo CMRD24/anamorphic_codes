@@ -116,7 +116,7 @@ xor_bytes(
 
 static int
 random_size_t(
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t *out)
 {
     uint8_t bytes[sizeof(size_t)];
@@ -171,7 +171,7 @@ random_size_t(
  */
 static int
 random_bounded(
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t bound,
     size_t *out)
 {
@@ -224,7 +224,7 @@ static int
 generate_permutation(
     size_t *permutation,
     size_t n,
-    MBPRC_Random *random)
+    RandomnessSource *random)
 {
     if (!permutation || !random)
         return -1;
@@ -264,7 +264,7 @@ generate_permutation(
 static MBPRC_Keys *
 high_keygen(
     const void *params_ptr,
-    MBPRC_Random *random)
+    RandomnessSource *random)
 {
     const PRCHigh_Params *params = params_ptr;
 
@@ -402,7 +402,7 @@ high_encode(
     const MBPRC_EncKey *key_ptr,
     const uint8_t *message,
     size_t message_bits,
-    MBPRC_Random *random,
+    RandomnessSource *random,
     size_t *output_bits)
 {
     const PRCHigh_Params *params =
@@ -574,13 +574,11 @@ high_encode(
         return NULL;
     }
 
-    const CSPRG *csprg = csprg_sodium();
+    //const CSPRG *csprg = csprg_sodium();
+    RandomnessSource rand = csprg_randomness(seed, seed_len);
+    
 
-    if (csprg_generate(csprg,
-            seed,
-            seed_len,
-            mask,
-            ecc_len) != 0) {
+    if (rand.rng(rand.ctx, mask, ecc_len) != 0) {
 
         free(encoded_seed);
         free(ecc_codeword);
@@ -896,13 +894,10 @@ high_decode(
         return 0;
     }
 
-    const CSPRG *csprg = csprg_sodium();
+    //const CSPRG *csprg = csprg_sodium();
+    RandomnessSource rand = csprg_randomness(seed, seed_len);
 
-    if (csprg_generate(csprg,
-            seed,
-            seed_len,
-            mask,
-            ecc_bytes) != 0) {
+    if (rand.rng(rand.ctx, mask, ecc_bytes) != 0) {
 
         free(y1);
         free(seed);

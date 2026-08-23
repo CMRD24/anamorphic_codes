@@ -1,11 +1,15 @@
 #ifndef CSPRG_SODIUM_H
 #define CSPRG_SODIUM_H
 
-#include "csprg.h"
+#include "random.h"
 
-/*
- * Returns a CSPRG implementation backed by libsodium.
- */
-const CSPRG *csprg_sodium(void);
+RandomnessSource
+csprg_randomness(
+    const uint8_t *seed,
+    size_t seed_length);
+
+void
+csprg_randomness_free(
+    RandomnessSource *random);
 
 #endif /* CSPRG_SODIUM_H */
