@@ -246,10 +246,7 @@ main(void)
         * ============================================================
         */
 
-        MBPRC_Random random = {
-            .rng = linux_secure_random,
-            .ctx = NULL
-        };
+        RandomnessSource random = linux_randomness();
 
 
 

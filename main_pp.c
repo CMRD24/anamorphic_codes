@@ -1,5 +1,6 @@
-#include "prcs/zerobit/implementations/prc_ldpc.h"
+#include "prcs/zerobit/implementations/prc_pp.h"
 #include "utils/random.h"
+#include "utils/hamming74.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,13 +14,7 @@
  * ================================================================
  */
 
-static const LDPCParams params = {
-    .n   = 1024,
-    .r   = 512,
-    .g   = 256,
-    .t   = 10,
-    .eta = 0.01
-};
+
 
 
 /*
@@ -112,16 +107,27 @@ main(void)
     /*
      * Instantiate the LDPC zero-bit PRC.
      */
+
+    ECC hamming_ecc = hamming74_ecc();
+
+     PPParams params = {
+    .delta = 0.05,
+    .ecc = &hamming_ecc,
+    .n = 16*8, //in bits!!! 
+    .q = 2,
+    .message_bytes = 8, 
+    .symbol_bits = 1
+
+    };
+
+
     ZBPRC prc =
-        ldpc_zbprc(&params);
+        prc_pp(&params);
 
     /*
      * Randomness source.
      */
-    ZBPRC_Random random = {
-        .rng = linux_secure_random,
-        .ctx = NULL
-    };
+    RandomnessSource random = linux_randomness();
 
     /*
      * Generate one key pair for the lifetime of this process.
@@ -304,7 +310,8 @@ main(void)
                 zbprc_decode(
                     &prc,
                     keys->dec,
-                    codeword
+                    codeword,
+                    params.n
                 );
 
             printf("%d\n",
