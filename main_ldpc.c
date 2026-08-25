@@ -137,6 +137,9 @@ main(void)
         return EXIT_FAILURE;
     }
 
+
+    anakey *akeys = ldpc_akeygen(&params, keys, &random);
+
     printf(
         "LDPC zero-bit PRC initialized.\n"
     );
@@ -246,6 +249,45 @@ main(void)
 
         /*
          * --------------------------------------------------------
+         * aencode
+         * --------------------------------------------------------
+         */
+
+        if (strcmp(line, "aencode") == 0) {
+
+            size_t output_bits = 0;
+
+            uint8_t *codeword =
+
+                ldpc_aencode(
+                    &params,
+                    keys->enc,
+                    akeys,
+                    &random,
+                    &output_bits
+                );
+
+            if (codeword == NULL) {
+
+                fprintf(stderr,
+                        "Encoding failed.\n");
+
+                continue;
+            }
+
+            print_codeword(
+                codeword,
+                output_bits
+            );
+
+            free(codeword);
+
+            continue;
+        }
+
+
+        /*
+         * --------------------------------------------------------
          * decode <codeword>
          * --------------------------------------------------------
          */
@@ -313,6 +355,76 @@ main(void)
             continue;
         }
 
+
+        /*
+         * --------------------------------------------------------
+         * adecode <codeword>
+         * --------------------------------------------------------
+         */
+
+        const char prefix2[] =
+            "adecode ";
+
+        size_t prefix2_len =
+            sizeof(prefix2) - 1;
+
+        if (strncmp(line,
+                    prefix2,
+                    prefix2_len) == 0) {
+
+            const char *codeword_string =
+                line + prefix2_len;
+
+            /*
+             * Reject:
+             *
+             *     decode
+             *
+             * or
+             *
+             *     decode <empty>
+             */
+            if (*codeword_string == '\0') {
+
+                fprintf(stderr,
+                        "Missing codeword.\n");
+
+                continue;
+            }
+
+            uint8_t *codeword =
+                parse_codeword(
+                    codeword_string,
+                    params.n
+                );
+
+            if (codeword == NULL) {
+
+                fprintf(stderr,
+                        "Invalid codeword. "
+                        "Expected exactly %zu bits "
+                        "containing only 0 and 1.\n",
+                        params.n);
+
+                continue;
+            }
+
+            int result = 
+                ldpc_adecode(
+                    &params,
+                    keys->dec,
+                    akeys,
+                    codeword,
+                    params.n
+                );
+
+            printf("%d\n",
+                   result);
+
+            free(codeword);
+
+            continue;
+        }
 
         /*
          * --------------------------------------------------------
