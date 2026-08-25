@@ -1,5 +1,5 @@
-#ifndef ZERO_BIT_PRC_H
-#define ZERO_BIT_PRC_H
+#ifndef AZERO_BIT_PRC_H
+#define AZERO_BIT_PRC_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -8,29 +8,7 @@
 #include "../../../utils/random.h"
 #include "../../zerobit/zerobit_prc.h"
 
-/*
- * ================================================================
- * Randomness
- * ================================================================
- */
 
-// typedef int (*ZBPRC_Rng)(
-//     void *ctx,
-//     uint8_t *out,
-//     size_t len
-// );
-
-// typedef struct {
-//     ZBPRC_Rng rng;
-//     void *ctx;
-// } ZBPRC_Random;
-
-
-/*
- * ================================================================
- * Opaque key types
- * ================================================================
- */
 
 typedef struct APRC_EncKey APRC_EncKey;
 typedef struct APRC_DecKey APRC_DecKey;
@@ -56,9 +34,13 @@ typedef struct {
 
 typedef struct {
 
+
+    const void *aparams;
+
     
     APRC_Keys *(*akeygen)(
         const void *params,
+        const void *aparams,
         ZBPRC_Keys *reg_keys,
         RandomnessSource *random
     );
@@ -66,6 +48,7 @@ typedef struct {
 
     uint8_t *(*aencode)(
         const void *params,
+        const void *aparams,
         const ZBPRC_EncKey *reg_key,
         const APRC_EncKey *dkey,
         RandomnessSource *random,
@@ -79,14 +62,14 @@ typedef struct {
      * ------------------------------------------------------------
      *
      * Returns:
-     *     2 = anamorphic accept (both 1)
-     *     1 = regular accept
+     *     1 = anamorphic accept
      *     0 = reject
      */
     int (*adecode)(
         const void *params,
+        const void *aparams,
         const ZBPRC_DecKey *reg_key,
-        const APRC_DecKey tkey,
+        const APRC_DecKey *tkey,
         const uint8_t *ciphertext,
         size_t ciphertext_bits
     );
@@ -100,11 +83,13 @@ typedef struct {
 
     void (*free_aenc_key)(
         const void *params,
+        const void *aparams,
         APRC_EncKey *key
     );
 
     void (*free_adec_key)(
         const void *params,
+        const void *aparams,
         APRC_DecKey *key
     );
 
@@ -123,27 +108,35 @@ typedef struct {
 
 
 
-static inline ZBPRC_Keys *
-a_zbprc_keygen(
+static inline APRC_Keys *
+zbprc_akeygen(
     const ZBPRC *prc,
+    const aZBPRC *aprc,
+    ZBPRC_Keys *keys,
     RandomnessSource *random)
 {
-    return prc->keygen(
+    return aprc->akeygen(
         prc->params,
+        aprc->aparams,
+        keys,
         random
     );
 }
 
 static inline uint8_t *
-zbprc_encode(
+zbprc_aencode(
     const ZBPRC *prc,
+    const aZBPRC *aprc,
     const ZBPRC_EncKey *key,
+    const APRC_EncKey *dkey,
     RandomnessSource *random,
     size_t *output_bits)
 {
-    return prc->encode(
+    return aprc->aencode(
         prc->params,
+        aprc->aparams,
         key,
+        dkey,
         random,
         output_bits
     );
@@ -151,15 +144,19 @@ zbprc_encode(
 
 
 static inline int
-zbprc_decode(
+zbprc_adecode(
     const ZBPRC *prc,
+    const aZBPRC *aprc,
     const ZBPRC_DecKey *key,
+    const APRC_DecKey *tkey,
     const uint8_t *ciphertext,
     size_t ciphertext_bits)
 {
-    return prc->decode(
+    return aprc->adecode(
         prc->params,
+        aprc->aparams,
         key,
+        tkey,
         ciphertext,
         ciphertext_bits
     );
@@ -167,38 +164,26 @@ zbprc_decode(
 
 
 static inline void
-zbprc_free_enc_key(
+zbprc_free_enc_akey(
     const ZBPRC *prc,
-    ZBPRC_EncKey *key)
+    const aZBPRC *aprc,
+    APRC_EncKey *key)
 {
-    prc->free_enc_key(prc->params,key);
+    aprc->free_aenc_key(prc->params, aprc->aparams,key);
 }
 
 
 static inline void
-zbprc_free_dec_key(
+zbprc_free_dec_akey(
     const ZBPRC *prc,
-    ZBPRC_DecKey *key)
+    const aZBPRC *aprc,
+    APRC_DecKey *key)
 {
-    prc->free_dec_key(prc->params,key);
+    aprc->free_adec_key(prc->params, aprc->aparams,key);
 }
 
 
-static inline void
-zbprc_free_keys(
-    const ZBPRC *prc,
-    ZBPRC_Keys *keys)
-{
-    if (!keys)
-        return;
 
-    if (keys->enc)
-        prc->free_enc_key(prc->params,keys->enc);
 
-    if (keys->dec)
-        prc->free_dec_key(prc->params,keys->dec);
 
-    free(keys);
-}
-
-#endif /* ZERO_BIT_PRC_H */
+#endif /* AZERO_BIT_PRC_H */

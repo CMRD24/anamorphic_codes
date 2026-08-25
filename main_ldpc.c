@@ -1,4 +1,5 @@
 #include "prcs/zerobit/implementations/prc_ldpc.h"
+#include "prcs/anamorphism/zerobit/aprc_ldpc.h"
 #include "utils/random.h"
 
 #include <stdio.h>
@@ -13,13 +14,19 @@
  * ================================================================
  */
 
-static const LDPCParams params = {
+ static const LDPCParams params = {
     .n   = 1024,
-    .r   = 512,
+    .r   = 100, //log^2(n)
     .g   = 256,
     .t   = 10,
     .eta = 0.01
 };
+
+
+static const A_LDPCParams aparams = {
+    .g_prime = 896//1024-256/2 = 1024-128=896
+};
+
 
 
 /*
@@ -138,7 +145,10 @@ main(void)
     }
 
 
-    anakey *akeys = ldpc_akeygen(&params, keys, &random);
+
+    aZBPRC aprc = aprc_ldpc(&aparams);
+
+    APRC_Keys *akeys = zbprc_akeygen(&prc, &aprc, keys, &random);
 
     printf(
         "LDPC zero-bit PRC initialized.\n"
@@ -259,10 +269,11 @@ main(void)
 
             uint8_t *codeword =
 
-                ldpc_aencode(
-                    &params,
+                zbprc_aencode(
+                    &prc,
+                    &aprc,
                     keys->enc,
-                    akeys,
+                    akeys->enc,
                     &random,
                     &output_bits
                 );
@@ -409,14 +420,7 @@ main(void)
                 continue;
             }
 
-            int result = 
-                ldpc_adecode(
-                    &params,
-                    keys->dec,
-                    akeys,
-                    codeword,
-                    params.n
-                );
+            int result = zbprc_adecode(&prc, &aprc, keys->dec, akeys->dec, codeword, params.n);
 
             printf("%d\n",
                    result);

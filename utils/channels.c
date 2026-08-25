@@ -49,7 +49,7 @@ static inline size_t bytes_for_bits(size_t bits)
  * ================================================================
  */
 
-static uint64_t random_u64(PRCDC_Random *random)
+static uint64_t random_u64(RandomnessSource *random)
 {
     uint64_t value;
 
@@ -84,7 +84,7 @@ static uint64_t random_u64(PRCDC_Random *random)
  * binary64 mantissa.
  */
 static double random_unit(
-    PRCDC_Random *random)
+    RandomnessSource *random)
 {
     const uint64_t x =
         random_u64(random) >> 11;
@@ -98,7 +98,7 @@ static double random_unit(
  * Bernoulli(p).
  */
 static int bernoulli(
-    PRCDC_Random *random,
+    RandomnessSource *random,
     double probability)
 {
     if (probability <= 0.0)
@@ -115,7 +115,7 @@ static int bernoulli(
  * Uniform random bit.
  */
 static uint8_t random_bit(
-    PRCDC_Random *random)
+    RandomnessSource *random)
 {
     return (uint8_t)(
         random_u64(random) & 1ULL
@@ -134,7 +134,7 @@ uint8_t *channel_edits(
     size_t input_bits,
     double edit_probability,
     size_t *output_bits,
-    PRCDC_Random *random)
+    RandomnessSource *random)
 {
     if (output_bits == NULL ||
         random == NULL ||
@@ -192,7 +192,7 @@ uint8_t *channel_deletions_edits(
     double deletion_probability,
     double edit_probability,
     size_t *output_bits,
-    PRCDC_Random *random)
+    RandomnessSource *random)
 {
     if (output_bits == NULL ||
         random == NULL ||
@@ -300,7 +300,7 @@ uint8_t *channel_deletions_edits_insertions(
     double edit_probability,
     double insertion_probability,
     size_t *output_bits,
-    PRCDC_Random *random)
+    RandomnessSource *random)
 {
     if (output_bits == NULL ||
         random == NULL ||

@@ -246,10 +246,7 @@ main(void)
      * ============================================================
      */
 
-    ZBPRC_Random random = {
-        .rng = linux_secure_random,
-        .ctx = NULL
-    };
+    RandomnessSource random = linux_randomness();
 
 
     /*
@@ -451,7 +448,8 @@ main(void)
                 zbprc_decode(
                     &prc,
                     keys->dec,
-                    codeword
+                    codeword,
+                    ciphertext_bits
                 );
 
             printf("%d\n", result);

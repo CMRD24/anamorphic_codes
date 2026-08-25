@@ -27,7 +27,7 @@ uint8_t *channel_edits(
     size_t input_bits,
     double edit_probability,
     size_t *output_bits,
-    PRCDC_Random *random);
+    RandomnessSource *random);
 
 
 /*
@@ -50,7 +50,7 @@ uint8_t *channel_deletions_edits(
     double deletion_probability,
     double edit_probability,
     size_t *output_bits,
-    PRCDC_Random *random);
+    RandomnessSource *random);
 
 
 /*
@@ -78,6 +78,6 @@ uint8_t *channel_deletions_edits_insertions(
     double edit_probability,
     double insertion_probability,
     size_t *output_bits,
-    PRCDC_Random *random);
+    RandomnessSource *random);
 
 #endif /* CHANNELS_H */
