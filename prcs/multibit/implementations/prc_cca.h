@@ -20,9 +20,9 @@ typedef struct {
     
 
     /*
-     * Security parameter λ in bits.
+     * Security parameter lambda in bits.
      *
-     * r has λ bits and R2 has λ bits.
+     * r has lambda bits and R2 has lambda bits.
      */
     size_t lambda_bits;
 

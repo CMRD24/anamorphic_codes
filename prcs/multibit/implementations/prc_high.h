@@ -67,7 +67,7 @@ typedef struct {
 } PRCHigh_Params;
 
 
-MBPRC prc_high_create(
+MBPRC prc_high(
     const PRCHigh_Params *params
 );
 

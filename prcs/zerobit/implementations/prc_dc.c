@@ -6,6 +6,8 @@
 
 #include <stdio.h>
 
+#include "../../../utils/random_utils.h"
+
 
 /*
  * ================================================================
@@ -100,32 +102,6 @@ prc_dc_majority(
 
 /*
  * ================================================================
- * Randomness
- * ================================================================
- */
-
-static int
-random_bytes(
-    RandomnessSource *random,
-    uint8_t *out,
-    size_t len)
-{
-    if (random == NULL ||
-        random->rng == NULL) {
-
-        return 0;
-    }
-
-    return random->rng(
-        random->ctx,
-        out,
-        len
-    );
-}
-
-
-/*
- * ================================================================
  * Majority-slice sampling
  * ================================================================
  *
@@ -167,14 +143,10 @@ sample_majority_slice(
         /*
          * Sample a uniformly random T-bit string.
          */
-        if (!random_bytes(
+        random_bytes(
                 random,
                 candidate,
-                bytes)) {
-
-            free(candidate);
-            return 0;
-        }
+                bytes);
 
         /*
          * Clear unused padding bits.

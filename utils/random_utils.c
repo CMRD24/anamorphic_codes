@@ -12,6 +12,13 @@
 #include "random.h"
 
 
+static inline void error(){
+    fprintf(stderr,
+                "secure randomness failure.\n");
+
+        exit(EXIT_FAILURE);
+        
+}
 
 /*
  * ================================================================
@@ -27,10 +34,7 @@
         random->rng == NULL ||
         !random->rng(random->ctx, out, len)) {
 
-        fprintf(stderr,
-                "ZBPRC-LDPC: secure randomness failure.\n");
-
-        exit(EXIT_FAILURE);
+        error();
     }
 }
 
@@ -138,24 +142,64 @@
 
 
 
- size_t random_bounded(RandomnessSource *random,
-                             size_t bound)
+
+
+size_t
+random_bounded(
+    RandomnessSource *random,
+    size_t bound)
 {
-    if (bound == 0)
-        return 0;
+    if (random == NULL || bound == 0){
+        error();
+    }
 
     uint64_t x;
-
-    /*
-     * Rejection sampling.
-     */
-    uint64_t limit =
-        UINT64_MAX -
-        (UINT64_MAX % (uint64_t)bound);
+    uint64_t threshold = -((uint64_t)bound) % (uint64_t)bound;
 
     do {
         x = random_u64(random);
-    } while (x >= limit);
+    } while (x < threshold);
 
     return (size_t)(x % bound);
+}
+
+
+/*
+ * Fisher-Yates permutation.
+ *
+ * pi[input_position] = output_position.
+ */
+void
+random_permutation(
+    RandomnessSource *random,
+    size_t *pi,
+    size_t n)
+{
+    if (!random || !pi){
+        error();
+    }
+
+    for (size_t i = 0;
+         i < n;
+         ++i)
+    {
+        pi[i] = i;
+    }
+
+    if (n <= 1)
+        return;
+
+    for (size_t i = n - 1;
+         i > 0;
+         --i)
+    {
+        size_t j = random_bounded(
+                random,
+                i + 1);
+
+        size_t tmp = pi[i];
+        pi[i] = pi[j];
+        pi[j] = tmp;
+    }
+
 }

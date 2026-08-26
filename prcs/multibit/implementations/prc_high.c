@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "../../../utils/csprg_sodium.h"
+#include "../../../utils/random_utils.h"
 
 
 /*
@@ -46,9 +47,7 @@ struct MBPRC_DecKey {
     MBPRC_DecKey *low_dec_key;
 
     /*
-     * Inverse bit permutation.
-     *
-     * inverse_permutation[i] = source position for output bit i.
+     * permutation.
      */
     size_t *permutation;
 
@@ -114,146 +113,6 @@ xor_bytes(
 
 
 
-static int
-random_size_t(
-    RandomnessSource *random,
-    size_t *out)
-{
-    uint8_t bytes[sizeof(size_t)];
-
-    if (!random ||
-        !random->rng ||
-        !out)
-    {
-        return 0;
-    }
-
-    if (!random->rng(
-            random->ctx,
-            bytes,
-            sizeof(bytes)))
-    {
-        return 0;
-    }
-
-    size_t value = 0;
-
-    for (size_t i = 0;
-         i < sizeof(bytes);
-         ++i)
-    {
-        value =
-            (value << 8) |
-            bytes[i];
-    }
-
-    *out = value;
-
-    return 1;
-}
-
-
-/*
- * ================================================================
- * Random integer
- * ================================================================
- *
- * Returns a uniformly distributed random value in [0, bound).
- *
- * Rejection sampling is used to avoid modulo bias.
- * ================================================================
- */
-
-
-
-/*
- * Sample an unbiased value in [0, bound).
- */
-static int
-random_bounded(
-    RandomnessSource *random,
-    size_t bound,
-    size_t *out)
-{
-    if (bound == 0)
-        return 0;
-
-    /*
-     * Rejection sampling.
-     */
-    size_t limit =
-        SIZE_MAX - (SIZE_MAX % bound);
-
-    size_t value;
-
-    do {
-
-        if (!random_size_t(
-                random,
-                &value))
-        {
-            return 0;
-        }
-
-    } while (value >= limit);
-
-    *out = value % bound;
-
-    return 1;
-}
-
-
-
-
-/*
- * ================================================================
- * Random permutation
- * ================================================================
- *
- * Fisher-Yates shuffle.
- *
- * permutation initially contains:
- *
- *     0, 1, ..., n-1
- *
- * and is then uniformly shuffled.
- * ================================================================
- */
-
-static int
-generate_permutation(
-    size_t *permutation,
-    size_t n,
-    RandomnessSource *random)
-{
-    if (!permutation || !random)
-        return -1;
-
-    for (size_t i = 0; i < n; ++i)
-        permutation[i] = i;
-
-    if (n < 2)
-        return 0;
-
-    for (size_t i = n - 1; i > 0; --i) {
-
-        size_t j;
-
-        if (!random_bounded(
-                random,
-                i + 1,
-                &j))
-            return -1;
-
-        size_t tmp = permutation[i];
-        permutation[i] = permutation[j];
-        permutation[j] = tmp;
-    }
-
-    return 0;
-}
-
-
 
 /*
  * ================================================================
@@ -303,11 +162,8 @@ high_keygen(
     if (!enc_key || !dec_key || !permutation)
         goto fail;
 
-    if (generate_permutation(
-            permutation,
-            total_bits,
-            random) != 0)
-        goto fail;
+    random_permutation(random, permutation, total_bits);
+
 
     keys = calloc(1, sizeof(*keys));
 
@@ -347,48 +203,6 @@ fail:
     return NULL;
 }
 
-/*
-//remove after testing:
-static int
-save_codeword(const char *filename,
-              const uint8_t *codeword,
-              size_t bits)
-{
-    FILE *file =
-        fopen(filename, "w");
-
-    if (file == NULL) {
-        perror("fopen");
-        return 0;
-    }
-
-    for (size_t i = 0;
-         i < bits;
-         ++i) {
-
-        if (fputc(
-                (codeword[i >> 3] &
-                 (uint8_t)(1u << (i & 7)))
-                ? '1'
-                : '0',
-                file) == EOF) {
-
-            fclose(file);
-            return 0;
-        }
-    }
-
-    if (fputc('\n', file) == EOF) {
-        fclose(file);
-        return 0;
-    }
-
-    fclose(file);
-
-    return 1;
-}
-
-*/
 
 /*
  * ================================================================
@@ -765,21 +579,6 @@ high_decode(
     if (!y)
         return 0;
 
-    // for (size_t i = 0;
-    //      i < total_bits;
-    //      ++i) {
-
-    //     set_bit(
-    //         y,
-    //         i,
-    //         get_bit(
-    //             ciphertext,
-    //             key->permutation_length == 0
-    //                 ? i
-    //                 : key->inverse_permutation[i]
-    //         )
-    //     );
-    // }
 
         for (size_t i = 0; i < total_bits; ++i) {
         set_bit(
@@ -894,7 +693,6 @@ high_decode(
         return 0;
     }
 
-    //const CSPRG *csprg = csprg_sodium();
     RandomnessSource rand = csprg_randomness(seed, seed_len);
 
     if (rand.rng(rand.ctx, mask, ecc_bytes) != 0) {
@@ -1030,7 +828,7 @@ high_free_dec_key(
 
 
 MBPRC
-prc_high_create(
+prc_high(
     const PRCHigh_Params *params)
 {
 

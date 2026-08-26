@@ -21,7 +21,9 @@ typedef struct {
 } LDPCParams;
 
 
-
+/*
+    utility: (anamorphic implementation can use the same function)
+*/
 void sample_sparse_p(RandomnessSource *random,
                             SparseP *P);
 

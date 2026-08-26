@@ -8,6 +8,8 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "../../../utils/random_utils.h"
+
 
 /*
  * ================================================================
@@ -61,129 +63,7 @@ struct ZBPRC_DecKey {
 };
 
 
-/*
- * ================================================================
- * Randomness
- * ================================================================
- */
 
- //1 on success
-static int
-random_bytes(
-    RandomnessSource *random,
-    uint8_t *out,
-    size_t len)
-{
-    if (!random || !random->rng)
-        return -1;
-
-    if (len == 0)
-        return 1;
-
-    return random->rng(
-        random->ctx,
-        out,
-        len
-    );
-}
-
-
-/*
- * Unbiased random value in [0,bound).
- */
-static int
-random_bounded(
-    RandomnessSource *random,
-    size_t bound,
-    size_t *out)
-{
-    if (!random || !out || bound == 0)
-        return 0;
-
-    /*
-     * Use a byte-oriented rejection sampler rather than
-     * assuming that size_t itself is uniformly generated.
-     */
-    size_t bits = 0;
-    size_t x = bound - 1;
-
-    while (x != 0) {
-        bits++;
-        x >>= 1;
-    }
-
-    size_t bytes = (bits + 7) / 8;
-
-    if (bytes == 0)
-        bytes = 1;
-
-    for (;;) {
-
-        uint8_t buf[sizeof(size_t)] = {0};
-
-        if (bytes > sizeof(buf))
-            return 0;
-
-        if (!random_bytes(
-                random,
-                buf,
-                bytes))
-            return 0;
-
-        x = 0;
-
-        for (size_t i = 0; i < bytes; i++)
-            x |= ((size_t)buf[i]) << (8 * i);
-
-        /*
-         * Mask unused high bits.
-         */
-        if (bits < sizeof(size_t) * 8)
-            x &= (((size_t)1 << bits) - 1);
-
-        if (x < bound) {
-            *out = x;
-            return 1;
-        }
-    }
-}
-
-
-/*
- * ================================================================
- * Permutation helpers
- * ================================================================
- */
-
-static int
-sample_permutation(
-    RandomnessSource *random,
-    size_t q,
-    size_t *p)
-{
-    for (size_t i = 0; i < q; i++)
-        p[i] = i;
-
-    /*
-     * Fisher-Yates.
-     */
-    for (size_t i = q; i > 1; i--) {
-
-        size_t j;
-
-        if (!random_bounded(
-                random,
-                i,
-                &j))
-            return -1;
-
-        size_t tmp = p[i - 1];
-        p[i - 1] = p[j];
-        p[j] = tmp;
-    }
-
-    return 0;
-}
 
 
 static int
@@ -198,33 +78,6 @@ invert_permutation(
     return 0;
 }
 
-
-static int
-sample_sigma(
-    RandomnessSource *random,
-    size_t n,
-    size_t *sigma)
-{
-    for (size_t i = 0; i < n; i++)
-        sigma[i] = i;
-
-    for (size_t i = n; i > 1; i--) {
-
-        size_t j;
-
-        if (!random_bounded(
-                random,
-                i,
-                &j))
-            return -1;
-
-        size_t tmp = sigma[i - 1];
-        sigma[i - 1] = sigma[j];
-        sigma[j] = tmp;
-    }
-
-    return 0;
-}
 
 
 /*
@@ -356,7 +209,6 @@ zbprc_pp_keygen(
         params->n == 0)
         return NULL;
 
-    printf("k1\n");
     /*
      * q must fit in symbol_bits bits.
      */
@@ -370,7 +222,6 @@ zbprc_pp_keygen(
             return NULL;
     }
 
-    printf("k2\n");
 
     size_t encoded_bytes;
 
@@ -380,23 +231,15 @@ zbprc_pp_keygen(
             &encoded_bytes) != 0)
         return NULL;
 
-    printf("k3\n");
 
     /*
      * The ECC's encoded representation must have exactly
      * this many bytes.
      */
-    printf("enc %zu\n", encoded_bytes);
-    printf("%zu\n", ecc_encoded_size(
-            params->ecc,
-            params->message_bytes));
-
     if (ecc_encoded_size(
             params->ecc,
             params->message_bytes) != encoded_bytes)
         return NULL;
-
-    printf("k4\n");
 
     /*
      * sigma.
@@ -407,18 +250,9 @@ zbprc_pp_keygen(
     if (!sigma)
         return NULL;
 
-    printf("k5\n");
-
-    if (sample_sigma(
-            random,
-            params->n,
-            sigma) != 0) {
-
-        free(sigma);
-        return NULL;
-    }
-
-    printf("k6\n");
+    random_permutation(
+            random, sigma,
+            params->n);
 
     /*
      * pi and inverse pi.
@@ -432,8 +266,6 @@ zbprc_pp_keygen(
     if (!pi || !pi_inv)
         goto fail;
 
-    printf("k6a\n");
-
     for (size_t i = 0; i < params->n; i++) {
 
         pi[i] =
@@ -445,11 +277,9 @@ zbprc_pp_keygen(
         if (!pi[i] || !pi_inv[i])
             goto fail;
 
-        if (sample_permutation(
+        random_permutation(
                 random,
-                params->q,
-                pi[i]) != 0)
-            goto fail;
+                pi[i], params->q);
 
         invert_permutation(
             pi[i],
@@ -457,8 +287,6 @@ zbprc_pp_keygen(
             pi_inv[i]
         );
     }
-
-    printf("k7\n");
 
     /*
      * q-ary OTP.
@@ -471,14 +299,7 @@ zbprc_pp_keygen(
 
     for (size_t i = 0; i < params->n; i++) {
 
-        if (!random_bounded(
-                random,
-                params->q,
-                &otp[i])) {
-
-            free(otp);
-            goto fail;
-        }
+        otp[i] = random_bounded(random, params->q);
     }
 
     /*
@@ -675,10 +496,6 @@ fail:
  * Symbol substitution channel
  * ================================================================
  *
- * IMPORTANT:
- *
- * channel_edits() works on bits. It therefore cannot directly
- * implement SC_delta over F_q.
  *
  * SC_p below implements the actual q-ary substitution channel:
  *
@@ -708,13 +525,9 @@ sample_substituted_symbol(
 
     if (probability >= 1.0) {
 
-        size_t y;
-
-        if (!random_bounded(
+        size_t y = random_bounded(
                 random,
-                q - 1,
-                &y))
-            return -1;
+                q - 1);
 
         /*
          * Map [0,q-2] to F_q \ {x}.
@@ -730,11 +543,10 @@ sample_substituted_symbol(
      */
     uint64_t r;
 
-    if (!random_bytes(
+    random_bytes(
             random,
             (uint8_t *)&r,
-            sizeof(r)))
-        return -1;
+            sizeof(r));
 
     double u =
         (double)(r >> 11) *
@@ -745,13 +557,9 @@ sample_substituted_symbol(
         return 0;
     }
 
-    size_t y;
-
-    if (!random_bounded(
+    size_t y = random_bounded(
             random,
-            q - 1,
-            &y))
-        return -1;
+            q - 1);
 
     *result =
         (y >= x) ? y + 1 : y;
@@ -813,15 +621,10 @@ zbprc_pp_encode(
         return NULL;
     }
 
-    if (!random_bytes(
+    random_bytes(
             random,
             message,
-            params->message_bytes)) {
-
-        free(message);
-        free(encoded);
-        return NULL;
-    }
+            params->message_bytes);
 
     size_t encoded_len =
         encoded_bytes;
@@ -969,18 +772,6 @@ zbprc_pp_encode(
                 key->symbol_bits
             );
 
-        /*
-         * Addition in F_q is NOT generally integer addition
-         * modulo q.
-         *
-         * The PRC construction requires the actual field
-         * operation here.
-         *
-         * Therefore this implementation assumes q-ary symbols
-         * are represented by Z_q for the OTP operation.
-         *
-         * For GF(2^m), this must instead be field addition/XOR.
-         */
         symbol =
             (symbol + key->otp[i]) %
             key->q;

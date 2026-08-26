@@ -37,22 +37,10 @@ typedef struct PRCLow_EncKey PRCLow_EncKey;
 typedef struct PRCLow_DecKey PRCLow_DecKey;
 
 
-/*
- * Create a PRC^ell_low instance.
- *
- */
-MBPRC prc_low_create(
+MBPRC prc_low(
     const PRCLow_Params *params
 );
 
 
-/*
- * Destroy the PRC wrapper created by prc_low_create().
- *
- * Does not free params or the underlying PRC.
- */
-void prc_low_destroy(
-    MBPRC *prc
-);
 
 #endif /* PRC_LOW_H */

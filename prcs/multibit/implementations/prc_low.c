@@ -5,6 +5,8 @@
 #include <limits.h>
 #include <stdio.h>
 
+#include "../../../utils/random_utils.h"
+
 
 /*
  * ================================================================
@@ -86,138 +88,6 @@ bits_to_bytes(
 
 
 
-
-
-/*
- * ================================================================
- * Random permutation
- * ================================================================
- */
-
-static int
-random_size_t(
-    RandomnessSource *random,
-    size_t *out)
-{
-    uint8_t bytes[sizeof(size_t)];
-
-    if (!random ||
-        !random->rng ||
-        !out)
-    {
-        return 0;
-    }
-
-    if (!random->rng(
-            random->ctx,
-            bytes,
-            sizeof(bytes)))
-    {
-        return 0;
-    }
-
-    size_t value = 0;
-
-    for (size_t i = 0;
-         i < sizeof(bytes);
-         ++i)
-    {
-        value =
-            (value << 8) |
-            bytes[i];
-    }
-
-    *out = value;
-
-    return 1;
-}
-
-
-/*
- * Sample an unbiased value in [0, bound).
- */
-static int
-random_bounded(
-    RandomnessSource *random,
-    size_t bound,
-    size_t *out)
-{
-    if (bound == 0)
-        return 0;
-
-    /*
-     * Rejection sampling.
-     */
-    size_t limit =
-        SIZE_MAX - (SIZE_MAX % bound);
-
-    size_t value;
-
-    do {
-
-        if (!random_size_t(
-                random,
-                &value))
-        {
-            return 0;
-        }
-
-    } while (value >= limit);
-
-    *out = value % bound;
-
-    return 1;
-}
-
-
-/*
- * Fisher-Yates permutation.
- *
- * pi[input_position] = output_position.
- */
-static int
-sample_permutation(
-    RandomnessSource *random,
-    size_t *pi,
-    size_t n)
-{
-    if (!random ||
-        !pi)
-    {
-        return 0;
-    }
-
-    for (size_t i = 0;
-         i < n;
-         ++i)
-    {
-        pi[i] = i;
-    }
-
-    if (n <= 1)
-        return 1;
-
-    for (size_t i = n - 1;
-         i > 0;
-         --i)
-    {
-        size_t j;
-
-        if (!random_bounded(
-                random,
-                i + 1,
-                &j))
-        {
-            return 0;
-        }
-
-        size_t tmp = pi[i];
-        pi[i] = pi[j];
-        pi[j] = tmp;
-    }
-
-    return 1;
-}
 
 
 static size_t *
@@ -397,13 +267,10 @@ prc_low_keygen(
     if (!enc->pi)
         goto failure;
 
-    if (!sample_permutation(
+    random_permutation(
             random,
             enc->pi,
-            total_bits))
-    {
-        goto failure;
-    }
+            total_bits);
 
     dec->pi_inv =
         invert_permutation(
@@ -976,7 +843,7 @@ prc_low_free_dec_key(
  */
 
 MBPRC
-prc_low_create(
+prc_low(
     const PRCLow_Params *params)
 {
 

@@ -1,5 +1,6 @@
 #include "prc_sharp.h"
 #include "../../../utils/csprg_sodium.h"
+#include "../../../utils/helpers.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -34,92 +35,6 @@ struct MBPRC_DecKey {
     MBPRC_DecKey *underlying_dec;
     MBPRC_EncKey *underlying_enc;
 };
-
-
-/*
- * ================================================================
- * Helpers
- * ================================================================
- */
-
-static size_t
-bits_to_bytes(
-    size_t bits)
-{
-    return (bits + 7) / 8;
-}
-
-
-/*
- * Copy arbitrary packed bits.
- *
- * Bit numbering is LSB-first inside each byte, consistent with
- * the rest of the PRC code.
- */
-static void
-copy_bits(
-    uint8_t *dst,
-    size_t dst_bit,
-    const uint8_t *src,
-    size_t src_bit,
-    size_t bits)
-{
-    for (size_t i = 0; i < bits; ++i) {
-
-        size_t s =
-            src_bit + i;
-
-        size_t d =
-            dst_bit + i;
-
-        uint8_t bit =
-            (uint8_t)(
-                (src[s >> 3] >> (s & 7)) & 1u
-            );
-
-        if (bit) {
-
-            dst[d >> 3] |=
-                (uint8_t)(1u << (d & 7));
-
-        } else {
-
-            dst[d >> 3] &=
-                (uint8_t)~(1u << (d & 7));
-        }
-    }
-}
-
-
-/*
- * Constant-time comparison.
- */
-static int
-constant_time_equal(
-    const uint8_t *a,
-    const uint8_t *b,
-    size_t len)
-{
-    uint8_t diff = 0;
-
-    for (size_t i = 0; i < len; ++i)
-        diff |= (uint8_t)(a[i] ^ b[i]);
-
-    return diff == 0;
-}
-
-
-static size_t bitwise_hamming_dist(const uint8_t *a,
-    const uint8_t *b,
-    size_t len){
-        size_t distance = 0;
-
-        for (size_t i = 0; i < len; i++) {
-            distance += __builtin_popcount((unsigned int)(a[i] ^ b[i]));
-        }
-
-        return distance;
-    }
 
 
 
@@ -433,81 +348,6 @@ sharp_encode(
 
 
 
-    // size_t r1_bytes =
-    //     SHARP_R1_BYTES;
-
-    // size_t r2_bytes =
-    //     lambda_bytes;
-
-    // if (r1_bytes >
-    //     SIZE_MAX - r2_bytes) {
-
-    //     free(rm);
-    //     free(r);
-
-    //     return NULL;
-    // }
-
-    // size_t prf_output_bytes =
-    //     r1_bytes + r2_bytes;
-
-    // size_t seed_len;
-
-    // size_t prf_key_bytes =
-    // bits_to_bytes(params->lambda_bits);
-
-    // uint8_t *seed =
-    //     make_prf_seed(
-    //         key->prf_key,
-    //         prf_key_bytes,
-    //         rm,
-    //         rm_bits,
-    //         &seed_len
-    //     );
-
-    // if (!seed) {
-
-    //     free(rm);
-    //     free(r);
-
-    //     return NULL;
-    // }
-
-
-    // uint8_t *prf_output =
-    //     malloc(prf_output_bytes);
-
-    // if (!prf_output) {
-
-    //     free(seed);
-    //     free(rm);
-    //     free(r);
-
-    //     return NULL;
-    // }
-
-    // printf("x0\n");
-
-
-    // if (csprg_generate(
-    //         csprg,
-    //         seed,
-    //         seed_len,
-    //         prf_output,
-    //         prf_output_bytes) != 0) {
-
-    //     free(prf_output);
-    //     free(seed);
-    //     free(rm);
-    //     free(r);
-
-    //     return NULL;
-    // }
-
-    // printf("x1\n");
-
-
-
     /*
      * ------------------------------------------------------------
      * 4. Construct r || m || R2
@@ -576,13 +416,6 @@ sharp_encode(
     printf("ey!\n");
 
 
-    /*
-     * IMPORTANT:
-     *
-     * We do NOT pass the caller's random source here.
-     *
-     * The underlying PRC's randomness is exactly R1.
-     */
     uint8_t *ciphertext =
         params->prc->encode(
             params->prc->params,
@@ -594,7 +427,6 @@ sharp_encode(
             encoded_message_bits,
 
             &pseudo,
-            //random,
 
             output_bits
         );

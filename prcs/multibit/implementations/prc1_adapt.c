@@ -29,47 +29,6 @@ struct MBPRC_DecKey {
 };
 
 
-/*
- * ================================================================
- * Randomness adapter
- * ================================================================
- *
- * RandomnessSource and RandomnessSource have the same shape, but they are
- * distinct C types. We therefore create a small adapter instead of
- * casting function pointers.
- */
-
-typedef struct {
-
-    RandomnessSource *random;
-
-} RandomAdapterCtx;
-
-
-static int
-random_adapter(
-    void *ctx,
-    uint8_t *out,
-    size_t len)
-{
-    RandomAdapterCtx *adapter =
-        (RandomAdapterCtx *)ctx;
-
-    if (!adapter ||
-        !adapter->random ||
-        !adapter->random->rng)
-    {
-        return 0;
-    }
-
-    return adapter->random->rng(
-        adapter->random->ctx,
-        out,
-        len
-    );
-}
-
-
 
 
 /*
@@ -88,8 +47,6 @@ prc1_adapt_keygen(
 
     const ZBPRC *prc;
 
-    RandomAdapterCtx random_ctx;
-    RandomnessSource zb_random;
 
     ZBPRC_Keys *keys0 = NULL;
     ZBPRC_Keys *keys1 = NULL;
@@ -111,22 +68,12 @@ prc1_adapt_keygen(
 
 
     /*
-     * Adapt the multibit RNG to the zero-bit RNG interface.
-     */
-
-    random_ctx.random = random;
-
-    zb_random.rng = random_adapter;
-    zb_random.ctx = &random_ctx;
-
-
-    /*
      * Generate the two independent zero-bit PRC key pairs.
      */
 
     keys0 = zbprc_keygen(
         prc,
-        &zb_random
+        &random
     );
 
     if (!keys0)
@@ -135,7 +82,7 @@ prc1_adapt_keygen(
 
     keys1 = zbprc_keygen(
         prc,
-        &zb_random
+        &random
     );
 
     if (!keys1)
@@ -228,8 +175,6 @@ prc1_adapt_encode(
 
     const ZBPRC *prc;
 
-    RandomAdapterCtx random_ctx;
-    RandomnessSource zb_random;
 
     const ZBPRC_EncKey *selected_key;
 
@@ -268,16 +213,10 @@ prc1_adapt_encode(
         selected_key = key->key1;
 
 
-    random_ctx.random = random;
-
-    zb_random.rng = random_adapter;
-    zb_random.ctx = &random_ctx;
-
-
     return zbprc_encode(
         prc,
         selected_key,
-        &zb_random,
+        &random,
         output_bits
     );
 }
@@ -449,7 +388,7 @@ prc1_adapt_free_dec_key(
 
 
 MBPRC
-prc1_adapt_create(
+prc1_adapt(
     const PRC1AdaptParams *params)
 {
     return (MBPRC) {

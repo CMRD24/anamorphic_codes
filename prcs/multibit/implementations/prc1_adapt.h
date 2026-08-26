@@ -36,7 +36,7 @@ typedef struct {
  * parameter pointer.
  */
 
-MBPRC prc1_adapt_create(
+MBPRC prc1_adapt(
     const PRC1AdaptParams *params
 );
 

@@ -31,5 +31,10 @@
  size_t random_bounded(RandomnessSource *random,
                              size_t bound);
     
-    
+void
+random_permutation(
+    RandomnessSource *random,
+    size_t *pi,
+    size_t n);
+
 #endif /* RANDOM_UTILS_H */
