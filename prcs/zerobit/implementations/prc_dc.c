@@ -693,7 +693,7 @@ prc_dc_free_dec_key(
  */
 
 ZBPRC
-prc_dc_create(
+prc_dc(
     const PRCDC_Params *params)
 {
     ZBPRC prc = {

@@ -70,5 +70,24 @@ prc_pp(
     const PPParams *params
 );
 
+//utilities for anamorphism:
+
+int
+zbprc_pp_decode_ws(
+    const void *vparams,
+    const ZBPRC_DecKey *key,
+    const uint8_t *ciphertext,
+    size_t ciphertext_bits,
+    uint8_t *seed_out
+    );
+
+ uint8_t *
+zbprc_pp_encode_ws(
+    const void *vparams,
+    const ZBPRC_EncKey *key,
+    RandomnessSource *random,
+    size_t *output_bits,
+    const uint8_t *seed
+);
 
 #endif /* ZERO_BIT_PRC_PP_H */

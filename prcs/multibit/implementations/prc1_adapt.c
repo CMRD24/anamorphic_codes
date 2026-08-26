@@ -73,7 +73,7 @@ prc1_adapt_keygen(
 
     keys0 = zbprc_keygen(
         prc,
-        &random
+        random
     );
 
     if (!keys0)
@@ -82,7 +82,7 @@ prc1_adapt_keygen(
 
     keys1 = zbprc_keygen(
         prc,
-        &random
+        random
     );
 
     if (!keys1)
@@ -216,7 +216,7 @@ prc1_adapt_encode(
     return zbprc_encode(
         prc,
         selected_key,
-        &random,
+        random,
         output_bits
     );
 }

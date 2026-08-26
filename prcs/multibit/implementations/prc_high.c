@@ -314,6 +314,8 @@ high_encode(
         return NULL;
     }
 
+    printf("t7\n");
+
     uint8_t *encoded_seed =
         mbprc_encode(
             params->low_prc,
@@ -324,6 +326,7 @@ high_encode(
             &low_output_bits
         );
 
+
     if (!encoded_seed ||
         low_output_bits != low_codeword_bits) {
 
@@ -332,6 +335,8 @@ high_encode(
 
         return NULL;
     }
+
+    printf("t8\n");
 
     //save_codeword("test-enc.txt", encoded_seed, low_output_bits);
 
@@ -355,6 +360,8 @@ high_encode(
         return NULL;
     }
 
+    printf("t9\n");
+
     size_t actual_ecc_len = 0;
 
     if (ecc_encode(
@@ -371,7 +378,7 @@ high_encode(
         return NULL;
     }
 
-    
+    printf("t10\n");
 
     /*
      * ------------------------------------------------------------
@@ -388,11 +395,13 @@ high_encode(
         return NULL;
     }
 
+    printf("t11\n");
+
     //const CSPRG *csprg = csprg_sodium();
     RandomnessSource rand = csprg_randomness(seed, seed_len);
     
 
-    if (rand.rng(rand.ctx, mask, ecc_len) != 0) {
+    if (!rand.rng(rand.ctx, mask, ecc_len)) {
 
         free(encoded_seed);
         free(ecc_codeword);
@@ -400,6 +409,8 @@ high_encode(
 
         return NULL;
     }
+
+    printf("t12\n");
 
     /*
      * ------------------------------------------------------------
@@ -576,8 +587,10 @@ high_decode(
     uint8_t *y =
         calloc(1, total_bytes);
 
-    if (!y)
+    if (!y){
         return 0;
+    }
+        
 
 
         for (size_t i = 0; i < total_bits; ++i) {
@@ -695,7 +708,7 @@ high_decode(
 
     RandomnessSource rand = csprg_randomness(seed, seed_len);
 
-    if (rand.rng(rand.ctx, mask, ecc_bytes) != 0) {
+    if (!rand.rng(rand.ctx, mask, ecc_bytes)) {
 
         free(y1);
         free(seed);

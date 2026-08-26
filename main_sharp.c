@@ -237,7 +237,7 @@ main(void)
 };
 
         ZBPRC underlying =
-            ldpc_zbprc(&params);
+            prc_ldpc(&params);
 
 
         /*
@@ -255,12 +255,11 @@ main(void)
             .ell = 64
         };
 
-        MBPRC prc_low =
-            prc_low_create(&low_params);
+        MBPRC prc_l = prc_low(&low_params);
 
         
         PRCSharp_Params high_params = {
-            .prc = &prc_low,
+            .prc = &prc_l,
             .lambda_bits = 16
         };
         

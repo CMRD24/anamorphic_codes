@@ -120,7 +120,7 @@ main(void)
      * Instantiate the LDPC zero-bit PRC.
      */
     ZBPRC prc =
-        ldpc_zbprc(&params);
+        prc_ldpc(&params);
 
     /*
      * Randomness source.

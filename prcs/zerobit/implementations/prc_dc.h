@@ -40,7 +40,7 @@ typedef struct {
  */
 
 ZBPRC
-prc_dc_create(
+prc_dc(
     const PRCDC_Params *params
 );
 

@@ -504,7 +504,7 @@ ldpc_decode(const void *params_ptr,
  */
 
 ZBPRC
-ldpc_zbprc(const LDPCParams *params)
+prc_ldpc(const LDPCParams *params)
 {
     ZBPRC prc = {
         .params = params,

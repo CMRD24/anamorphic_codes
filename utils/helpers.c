@@ -80,7 +80,7 @@ constant_time_equal(
 }
 
 
-static size_t bitwise_hamming_dist(const uint8_t *a,
+size_t bitwise_hamming_dist(const uint8_t *a,
     const uint8_t *b,
     size_t len){
         size_t distance = 0;

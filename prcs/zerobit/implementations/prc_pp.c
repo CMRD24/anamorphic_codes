@@ -574,12 +574,16 @@ sample_substituted_symbol(
  * ================================================================
  */
 
-static uint8_t *
-zbprc_pp_encode(
+
+
+ uint8_t *
+zbprc_pp_encode_ws(
     const void *vparams,
     const ZBPRC_EncKey *key,
     RandomnessSource *random,
-    size_t *output_bits)
+    size_t *output_bits,
+    const uint8_t *seed
+)
 {
     const PPParams *params =
         vparams;
@@ -591,6 +595,7 @@ zbprc_pp_encode(
         !output_bits)
         return NULL;
 
+
     size_t encoded_bytes;
 
     if (checked_symbol_bytes(
@@ -598,7 +603,15 @@ zbprc_pp_encode(
             key->symbol_bits,
             &encoded_bytes) != 0)
         return NULL;
+    
+    uint8_t *encoded =
+        calloc(encoded_bytes, 1);
 
+
+    if (!encoded) {
+        free(encoded);
+        return NULL;
+    }
 
     /*
      * ------------------------------------------------------------
@@ -609,40 +622,21 @@ zbprc_pp_encode(
      * is represented as message_bytes random bytes.
      */
 
-    uint8_t *message =
-        malloc(params->message_bytes);
-
-    uint8_t *encoded =
-        calloc(encoded_bytes, 1);
-
-    if (!message || !encoded) {
-        free(message);
-        free(encoded);
-        return NULL;
-    }
-
-    random_bytes(
-            random,
-            message,
-            params->message_bytes);
 
     size_t encoded_len =
         encoded_bytes;
 
     if (ecc_encode(
             params->ecc,
-            message,
+            seed,
             params->message_bytes,
             encoded,
             &encoded_len) != 0 ||
         encoded_len != encoded_bytes) {
 
-        free(message);
         free(encoded);
         return NULL;
     }
-
-    free(message);
 
 
     /*
@@ -793,6 +787,40 @@ zbprc_pp_encode(
 }
 
 
+
+
+static uint8_t *
+zbprc_pp_encode(
+    const void *vparams,
+    const ZBPRC_EncKey *key,
+    RandomnessSource *random,
+    size_t *output_bits
+){
+
+    const PPParams *params =
+        vparams;
+
+    uint8_t *message =
+        malloc(params->message_bytes);
+
+
+    if (!message) {
+        free(message);
+        return NULL;
+    }
+
+    random_bytes(
+            random,
+            message,
+            params->message_bytes);
+
+    uint8_t *encoded = zbprc_pp_encode_ws(vparams, key, random, output_bits, message);
+
+    free(message);
+    return encoded;
+}
+
+
 /*
  * ================================================================
  * Hamming distance over F_q
@@ -838,12 +866,16 @@ symbol_hamming_distance(
  * ================================================================
  */
 
-static int
-zbprc_pp_decode(
+
+
+int
+zbprc_pp_decode_ws(
     const void *vparams,
     const ZBPRC_DecKey *key,
     const uint8_t *ciphertext,
-    size_t ciphertext_bits)
+    size_t ciphertext_bits,
+    uint8_t *seed_out
+    )
 {
     const PPParams *params =
         vparams;
@@ -981,22 +1013,15 @@ zbprc_pp_decode(
         return 0;
     }
 
-    uint8_t *message =
-        malloc(decoded_bytes);
-
-    if (!message) {
-        free(codeword);
-        return 0;
-    }
+    
 
     if (ecc_decode(
             params->ecc,
             codeword,
             encoded_bytes,
-            message,
+            seed_out,
             decoded_bytes) != 0) {
 
-        free(message);
         free(codeword);
         return 0;
     }
@@ -1012,7 +1037,6 @@ zbprc_pp_decode(
         calloc(encoded_bytes, 1);
 
     if (!reencoded) {
-        free(message);
         free(codeword);
         return 0;
     }
@@ -1022,19 +1046,17 @@ zbprc_pp_decode(
 
     if (ecc_encode(
             params->ecc,
-            message,
+            seed_out,
             decoded_bytes,
             reencoded,
             &reencoded_len) != 0 ||
         reencoded_len != encoded_bytes) {
 
-        free(message);
         free(codeword);
         free(reencoded);
         return 0;
     }
 
-    free(message);
 
 
     /*
@@ -1062,6 +1084,54 @@ zbprc_pp_decode(
 
     return 1;
 }
+
+
+
+static int
+zbprc_pp_decode(
+    const void *vparams,
+    const ZBPRC_DecKey *key,
+    const uint8_t *ciphertext,
+    size_t ciphertext_bits
+    ){
+
+        const PPParams *params =
+        vparams;
+
+        size_t encoded_bytes;
+
+    if (checked_symbol_bytes(
+            key->n,
+            key->symbol_bits,
+            &encoded_bytes) != 0)
+        return 0;
+
+    size_t decoded_bytes =
+        ecc_decoded_size(
+            params->ecc,
+            encoded_bytes
+        );
+
+    if (decoded_bytes == 0) {
+        return 0;
+    }
+
+        uint8_t *seed =
+        malloc(decoded_bytes);
+
+        if (!seed) {
+            return 0;
+        }
+
+        int decoded = zbprc_pp_decode_ws(vparams, key, ciphertext, ciphertext_bits, seed);
+
+        //regular mode doesn't use seed
+        free(seed);
+
+        return decoded;
+
+}
+
 
 
 /*

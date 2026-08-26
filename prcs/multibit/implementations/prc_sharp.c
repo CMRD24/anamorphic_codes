@@ -234,14 +234,18 @@ sharp_keygen(
  * ================================================================
  */
 
+
+
 static uint8_t *
-sharp_encode(
+sharp_encode_ws(
     const void *vparams,
     const MBPRC_EncKey *vkey,
     const uint8_t *message,
     size_t message_bits,
     RandomnessSource *random,
-    size_t *output_bits)
+    size_t *output_bits,
+    const uint8_t *seed    
+)
 {
     const PRCSharp_Params *params =
         (const PRCSharp_Params *)vparams;
@@ -255,7 +259,8 @@ sharp_encode(
         !key ||
         !message ||
         !random ||
-        !output_bits)
+        !output_bits||
+        !seed)
         return NULL;
 
 
@@ -263,29 +268,8 @@ sharp_encode(
         params->lambda_bits;
 
 
-    /*
-     * ------------------------------------------------------------
-     * 1. Sample r <- {0,1}^lambda
-     * ------------------------------------------------------------
-     */
-
     size_t lambda_bytes =
         bits_to_bytes(lambda);
-
-    uint8_t *r =
-        calloc(1, lambda_bytes);
-
-    if (!r)
-        return NULL;
-
-    if (!random->rng(
-            random->ctx,
-            r,
-            lambda_bytes)) {
-
-        free(r);
-        return NULL;
-    }
 
 
     /*
@@ -297,7 +281,6 @@ sharp_encode(
     if (lambda >
         SIZE_MAX - message_bits) {
 
-        free(r);
         return NULL;
     }
 
@@ -312,14 +295,13 @@ sharp_encode(
 
     if (!rm) {
 
-        free(r);
         return NULL;
     }
 
     copy_bits(
         rm,
         0,
-        r,
+        seed,
         0,
         lambda
     );
@@ -366,7 +348,6 @@ sharp_encode(
     {
         csprg_randomness_free(&pseudo);
         free(rm);
-        free(r);
 
         return NULL;
     }
@@ -386,7 +367,6 @@ sharp_encode(
 
         csprg_randomness_free(&pseudo);
         free(rm);
-        free(r);
 
         return NULL;
     }
@@ -438,9 +418,66 @@ sharp_encode(
     csprg_randomness_free(&pseudo);
     free(r2);
     free(rm);
-    free(r);
 
     return ciphertext;
+}
+
+
+
+ static uint8_t *
+sharp_encode(
+    const void *vparams,
+    const MBPRC_EncKey *vkey,
+    const uint8_t *message,
+    size_t message_bits,
+    RandomnessSource *random,
+    size_t *output_bits
+){
+
+    const PRCSharp_Params *params =
+        (const PRCSharp_Params *)vparams;
+
+    size_t lambda =
+        params->lambda_bits;
+/*
+     * ------------------------------------------------------------
+     * 1. Sample r <- {0,1}^lambda
+     * ------------------------------------------------------------
+     */
+
+    size_t lambda_bytes =
+        bits_to_bytes(lambda);
+
+    uint8_t *r =
+        calloc(1, lambda_bytes);
+
+    if (!r)
+        return NULL;
+
+    if (!random->rng(
+            random->ctx,
+            r,
+            lambda_bytes)) {
+
+        free(r);
+        return NULL;
+    }
+
+    uint8_t *encoding = sharp_encode_ws(params, 
+        vkey,
+        message,
+        message_bits,
+        random,
+        output_bits,
+        r
+    );
+
+    if(encoding==NULL){
+        free(r);
+    }
+
+    return encoding;
+
 }
 
 
@@ -450,14 +487,16 @@ sharp_encode(
  * ================================================================
  */
 
-static int
-sharp_decode(
+
+int
+sharp_decode_ws(
     const void *vparams,
     const MBPRC_DecKey *vkey,
     const uint8_t *ciphertext,
     size_t ciphertext_bits,
     uint8_t *message_out,
-    size_t *message_bits_out)
+    size_t *message_bits_out,
+    uint8_t *seed_out)
 {
     const PRCSharp_Params *params =
         (const PRCSharp_Params *)vparams;
@@ -587,6 +626,14 @@ sharp_decode(
         decoded,
         0,
         rm_bits
+    );
+
+    copy_bits(
+        seed_out,
+        0,
+        rm,
+        0,
+        lambda
     );
 
 
@@ -749,6 +796,37 @@ sharp_decode(
     free(decoded);
 
     return 1;
+}
+
+
+ static int
+sharp_decode(
+    const void *vparams,
+    const MBPRC_DecKey *vkey,
+    const uint8_t *ciphertext,
+    size_t ciphertext_bits,
+    uint8_t *message_out,
+    size_t *message_bits_out){
+
+const PRCSharp_Params *params =
+        (const PRCSharp_Params *)vparams;
+
+size_t lambda_bytes =
+        bits_to_bytes(params->lambda_bits);
+
+uint8_t* seed = calloc(1, lambda_bytes);
+
+if(!seed){
+    return 0;
+}
+
+int decoding = sharp_decode_ws(vparams, vkey, ciphertext, ciphertext_bits, message_out, message_bits_out, seed);
+
+//regular mode doesn't make use of the seed:
+
+free(seed);
+return decoding;
+
 }
 
 

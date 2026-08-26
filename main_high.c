@@ -237,7 +237,7 @@ main(void)
 };
 
         ZBPRC underlying =
-            ldpc_zbprc(&params);
+            prc_ldpc(&params);
 
 
         /*
@@ -255,19 +255,19 @@ main(void)
             .ell = 64
         };
 
-        MBPRC prc_low =
-            prc_low_create(&low_params);
+        MBPRC prc_l =
+            prc_low(&low_params);
 
         ECC ecc = hamming74_ecc();
 
         PRCHigh_Params high_params = {
-            .low_prc = &prc_low,
+            .low_prc = &prc_l,
             .lambda = 64,
             .ecc = &ecc,
             .message_bits = MESSAGE_SIZE*8
         };
         
-        MBPRC prc = prc_high_create(&high_params);
+        MBPRC prc = prc_high(&high_params);
 
 /*
  * ============================================================

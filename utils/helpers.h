@@ -39,5 +39,9 @@ constant_time_equal(
     const uint8_t *b,
     size_t len);
 
+size_t bitwise_hamming_dist(const uint8_t *a,
+    const uint8_t *b,
+    size_t len);
+
 
 #endif /* HELPERS_H */

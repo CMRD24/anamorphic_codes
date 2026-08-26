@@ -35,7 +35,7 @@ void sample_sparse_p(RandomnessSource *random,
  */
 
 ZBPRC
-ldpc_zbprc(
+prc_ldpc(
     const LDPCParams *params
 );
 
