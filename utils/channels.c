@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 /*
  * ================================================================
  * Bit helpers
@@ -15,12 +14,10 @@ static inline uint8_t get_bit(
     const uint8_t *data,
     size_t index)
 {
-    return (uint8_t)(
-        (data[index >> 3] >>
-         (index & 7)) & 1u
-    );
+    return (uint8_t)((data[index >> 3] >>
+                      (index & 7)) &
+                     1u);
 }
-
 
 static inline void set_bit(
     uint8_t *data,
@@ -36,12 +33,10 @@ static inline void set_bit(
         data[index >> 3] &= (uint8_t)~mask;
 }
 
-
 static inline size_t bytes_for_bits(size_t bits)
 {
     return (bits + 7) / 8;
 }
-
 
 /*
  * ================================================================
@@ -54,7 +49,8 @@ static uint64_t random_u64(RandomnessSource *random)
     uint64_t value;
 
     if (random == NULL ||
-        random->rng == NULL) {
+        random->rng == NULL)
+    {
 
         fprintf(stderr,
                 "channels: invalid RNG.\n");
@@ -65,7 +61,8 @@ static uint64_t random_u64(RandomnessSource *random)
     if (!random->rng(
             random->ctx,
             (uint8_t *)&value,
-            sizeof(value))) {
+            sizeof(value)))
+    {
 
         fprintf(stderr,
                 "channels: secure randomness failure.\n");
@@ -75,7 +72,6 @@ static uint64_t random_u64(RandomnessSource *random)
 
     return value;
 }
-
 
 /*
  * Generate a uniform random double in [0,1).
@@ -93,7 +89,6 @@ static double random_unit(
            (1.0 / 9007199254740992.0);
 }
 
-
 /*
  * Bernoulli(p).
  */
@@ -110,18 +105,14 @@ static int bernoulli(
     return random_unit(random) < probability;
 }
 
-
 /*
  * Uniform random bit.
  */
 static uint8_t random_bit(
     RandomnessSource *random)
 {
-    return (uint8_t)(
-        random_u64(random) & 1ULL
-    );
+    return (uint8_t)(random_u64(random) & 1ULL);
 }
-
 
 /*
  * ================================================================
@@ -140,7 +131,8 @@ uint8_t *channel_edits(
         random == NULL ||
         (input == NULL && input_bits != 0) ||
         edit_probability < 0.0 ||
-        edit_probability > 1.0) {
+        edit_probability > 1.0)
+    {
 
         return NULL;
     }
@@ -154,21 +146,24 @@ uint8_t *channel_edits(
         calloc(output_bytes, 1);
 
     if (output == NULL &&
-        output_bytes != 0) {
+        output_bytes != 0)
+    {
 
         return NULL;
     }
 
     for (size_t i = 0;
          i < input_bits;
-         ++i) {
+         ++i)
+    {
 
         uint8_t bit =
             get_bit(input, i);
 
         if (bernoulli(
                 random,
-                edit_probability)) {
+                edit_probability))
+        {
 
             bit ^= 1u;
         }
@@ -178,7 +173,6 @@ uint8_t *channel_edits(
 
     return output;
 }
-
 
 /*
  * ================================================================
@@ -200,7 +194,8 @@ uint8_t *channel_deletions_edits(
         deletion_probability < 0.0 ||
         deletion_probability > 1.0 ||
         edit_probability < 0.0 ||
-        edit_probability > 1.0) {
+        edit_probability > 1.0)
+    {
 
         return NULL;
     }
@@ -214,11 +209,11 @@ uint8_t *channel_deletions_edits(
     uint8_t *output =
         calloc(
             bytes_for_bits(max_output_bits),
-            1
-        );
+            1);
 
     if (output == NULL &&
-        max_output_bits != 0) {
+        max_output_bits != 0)
+    {
 
         return NULL;
     }
@@ -227,14 +222,16 @@ uint8_t *channel_deletions_edits(
 
     for (size_t i = 0;
          i < input_bits;
-         ++i) {
+         ++i)
+    {
 
         /*
          * Delete this bit.
          */
         if (bernoulli(
                 random,
-                deletion_probability)) {
+                deletion_probability))
+        {
 
             continue;
         }
@@ -250,7 +247,8 @@ uint8_t *channel_deletions_edits(
          */
         if (bernoulli(
                 random,
-                edit_probability)) {
+                edit_probability))
+        {
 
             bit ^= 1u;
         }
@@ -272,7 +270,8 @@ uint8_t *channel_deletions_edits(
     const size_t actual_bytes =
         bytes_for_bits(written);
 
-    if (actual_bytes == 0) {
+    if (actual_bytes == 0)
+    {
         free(output);
         return NULL;
     }
@@ -285,7 +284,6 @@ uint8_t *channel_deletions_edits(
 
     return output;
 }
-
 
 /*
  * ================================================================
@@ -310,7 +308,8 @@ uint8_t *channel_deletions_edits_insertions(
         edit_probability < 0.0 ||
         edit_probability > 1.0 ||
         insertion_probability < 0.0 ||
-        insertion_probability > 1.0) {
+        insertion_probability > 1.0)
+    {
 
         return NULL;
     }
@@ -326,7 +325,8 @@ uint8_t *channel_deletions_edits_insertions(
      *     output <= 2 * input_bits
      */
     if (input_bits >
-        SIZE_MAX / 2) {
+        SIZE_MAX / 2)
+    {
 
         return NULL;
     }
@@ -337,11 +337,11 @@ uint8_t *channel_deletions_edits_insertions(
     uint8_t *output =
         calloc(
             bytes_for_bits(max_output_bits),
-            1
-        );
+            1);
 
     if (output == NULL &&
-        max_output_bits != 0) {
+        max_output_bits != 0)
+    {
 
         return NULL;
     }
@@ -350,7 +350,8 @@ uint8_t *channel_deletions_edits_insertions(
 
     for (size_t i = 0;
          i < input_bits;
-         ++i) {
+         ++i)
+    {
 
         /*
          * --------------------------------------------------------
@@ -363,7 +364,8 @@ uint8_t *channel_deletions_edits_insertions(
                 random,
                 deletion_probability);
 
-        if (!deleted) {
+        if (!deleted)
+        {
 
             /*
              * ----------------------------------------------------
@@ -382,7 +384,8 @@ uint8_t *channel_deletions_edits_insertions(
 
             if (bernoulli(
                     random,
-                    edit_probability)) {
+                    edit_probability))
+            {
 
                 bit ^= 1u;
             }
@@ -411,7 +414,8 @@ uint8_t *channel_deletions_edits_insertions(
 
         if (bernoulli(
                 random,
-                insertion_probability)) {
+                insertion_probability))
+        {
 
             const uint8_t bit =
                 random_bit(random);
@@ -429,7 +433,8 @@ uint8_t *channel_deletions_edits_insertions(
     /*
      * Handle empty output explicitly.
      */
-    if (written == 0) {
+    if (written == 0)
+    {
         free(output);
         return NULL;
     }

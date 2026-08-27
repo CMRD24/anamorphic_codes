@@ -105,4 +105,9 @@ kernel_basis_to_packed_g(
  PackedMatrix
 packed_g_to_matrix(const PackedG *G);
 
+PackedG
+sparse_p_mul_packed_g(
+    const SparseP *P,
+    const PackedG *G);
+
 #endif /* MATRIX_H */

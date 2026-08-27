@@ -741,3 +741,33 @@ packed_g_to_matrix(const PackedG *G)
     return M;
 }
 
+PackedG
+sparse_p_mul_packed_g(
+    const SparseP *P,
+    const PackedG *G)
+{
+    if (P == NULL || G == NULL)
+        return (PackedG){0};
+
+    /* P is r × n, G is n × g */
+    if (P->n != G->n)
+        return (PackedG){0};
+
+    PackedG result = packed_g_alloc(P->r, G->g);
+
+    for (size_t j = 0; j < G->g; j++) {
+        /*
+         * G->columns[j] is the j-th column of G,
+         * so compute:
+         *
+         * result[:, j] = P * G[:, j]
+         */
+        sparse_p_mul(
+            P,
+            &G->columns[j],
+            &result.columns[j]);
+    }
+
+    return result;
+}
+

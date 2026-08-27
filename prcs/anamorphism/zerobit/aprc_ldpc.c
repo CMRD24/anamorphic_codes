@@ -114,112 +114,44 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
         return NULL;
     }
 
-    
-    size_t k = params->g/2;
-    size_t g_prime_dim = aparams->g_prime; //params->n-params->r+k;//params->n-k;
-
-    if (params->r <= params->g/2 && params->g <= params->n-params->r){
-        printf("Setting 2\n");
-        g_prime_dim = params->n-k;
-    }
+    size_t r_prime = params->g/2;
     
     /*
      * Sample P'.
      */
     SparseP P_prime =
-        sparse_p_alloc(params->r,
+        sparse_p_alloc(r_prime,
                        params->n,
                        params->t);
 
     sample_sparse_p(random, &P_prime);
 
     printf("ak1\n");
-    /*
-     * Compute ker(P').
-     */
-    PackedMatrix A =
-        sparse_p_to_packed(&P_prime);
-    KernelBasis kerP =
-        kernel_basis(&A);
+
+    //compute P'G
+
+    PackedG PpG = sparse_p_mul_packed_g(&P_prime, &reg_keys->enc->G);
 
     
-
-    
-
-    printf("ak2\n");
 
     /*
-     * Sample G' uniformly from ker(P').
+     * Compute ker(P'G).
      */
-    PackedG G_prime =
-        packed_g_alloc(params->n,
-                       g_prime_dim);
+    PackedMatrix temp = packed_g_to_matrix(&PpG);
 
-    for (size_t j = 0;
-         j < g_prime_dim;
-         ++j) {
-
-        for (size_t k = 0;
-             k < kerP.dimension;
-             ++k) {
-
-            if (random_bit(random)) {
-
-                for (size_t w = 0;
-                     w < G_prime.columns[j].words;
-                     ++w) {
-
-                    G_prime.columns[j].data[w] ^=
-                        kerP.vectors[k].data[w];
-                }
-            }
-        }
-    }
-
-    printf("ak3\n");
-
-    kernel_basis_free(&kerP);
-
-    //create G|G'
-
-    PackedMatrix GG = concat_g_matrices(&reg_keys->enc->G, &G_prime);
-
-    printf("gg' dim %zu x %zu\n", GG.rows, GG.cols);
-    /*
-     * Compute ker(G|G').
-     */
-    KernelBasis K_prime =
-        kernel_basis(&GG);
-
-     printf("k dim %zu\n", K_prime.dimension);
-
-    printf("ak5\n");
+    KernelBasis kerPpG =
+        kernel_basis(&temp);
 
     
+    printf("ker P'G dim %zu\n", kerPpG.dimension);
 
-    printf("ak6\n");
 
+    PackedG B = kernel_basis_to_packed_g(&kerPpG, params->g);
 
-    printf("ak6a\n");
-    PackedMatrix mtemp0 = packed_g_to_matrix(&reg_keys->enc->G);
     
-    printf("dim ker G       = %zu\n", kernel_basis(&mtemp0).dimension);
-    printf("G is  %zu x %zu\n", reg_keys->enc->G.n, reg_keys->enc->G.g);
-    PackedMatrix mtemp = packed_g_to_matrix(&G_prime);
     
-    printf("dim ker G'       = %zu\n", kernel_basis(&mtemp).dimension);
-    printf("G' is  %zu x %zu\n", G_prime.n, G_prime.g);
-    printf("dim kern GG'       = %zu\n", kernel_basis(&GG).dimension);
     
 
-
-    printf("k dim %zu\n", K_prime.dimension);
-
-    PackedG B = kernel_basis_to_packed_g(&K_prime, reg_keys->enc->G.g);
-
-    printf("b %zu x %zu\n", B.n, B.g);
-    
-    printf("ak6b\n");
 
     dk->enc->Subspace = malloc(sizeof(PackedG));
     if (dk->enc->Subspace == NULL) {
@@ -239,8 +171,6 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
 
     *dk->dec->P_prime = P_prime;
 
-
-    printf("ak7\n");
 
     //packed_matrix_free(A);
 
@@ -385,8 +315,12 @@ ldpc_adecode(const void *params_ptr,
 
     (void)aparams_ptr;
 
+    
+
     const LDPCParams *params =
         (const LDPCParams *)params_ptr;
+
+    size_t r_prime = params->g/2;
 
     if (params == NULL ||
         key == NULL ||
@@ -456,6 +390,8 @@ ldpc_adecode(const void *params_ptr,
     size_t weight =
         bitvector_weight(&Pc);
 
+    printf("weight %zu\n", weight);
+
     /*
      * Threshold:
      *
@@ -463,9 +399,9 @@ ldpc_adecode(const void *params_ptr,
      */
     double threshold =
         (0.5 -
-         pow((double)params->r,
+         pow((double)r_prime,
              -0.25))
-        * (double)params->r;
+        * (double)r_prime;
 
     int result =
         ((double)weight < threshold);

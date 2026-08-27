@@ -16,15 +16,15 @@
 
  static const LDPCParams params = {
     .n   = 1024,
-    .r   = 100, //log^2(n)
-    .g   = 256,
+    .r   = 900, //log^2(n) //100
+    .g   = 100,             //256
     .t   = 10,
     .eta = 0.01
 };
 
 
 static const A_LDPCParams aparams = {
-    .g_prime = 896//1024-256/2 = 1024-128=896
+    .g_prime = 174//1024-256/2 = 1024-128=896
 };
 
 
