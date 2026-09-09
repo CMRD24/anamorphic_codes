@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "../multibit_prc.h"
+#include "../multibit_prc_rr.h"
 
 
 
@@ -36,6 +37,11 @@ typedef struct {
 
 MBPRC
 prc_cca(
+    const PRC_CCA_Params *params
+);
+
+MBPRC_RR
+prc_cca_cc(
     const PRC_CCA_Params *params
 );
 

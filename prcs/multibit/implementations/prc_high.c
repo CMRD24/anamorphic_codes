@@ -204,6 +204,75 @@ fail:
 }
 
 
+
+high_encode(const void *params_ptr,
+    const MBPRC_EncKey *key_ptr,
+    const uint8_t *message,
+    size_t message_bits,
+    RandomnessSource *random,
+    size_t *output_bits){
+
+
+    const PRCHigh_Params *params =
+        (const PRCHigh_Params *)params_ptr;
+
+    const MBPRC_EncKey *key =
+        (const MBPRC_EncKey *)key_ptr;
+
+    if (!params ||
+        !key ||
+        !message ||
+        !random ||
+        !output_bits){
+            return NULL;
+
+        }
+        
+
+    
+    /*
+     * The ECC interface operates on whole bytes.
+     */
+    if (message_bits % 8 != 0){
+        printf("Message bits must be devisible by 8\n");
+        return NULL;
+    }
+    
+        
+
+    const size_t message_len =
+        message_bits / 8;
+
+    /*
+     * The seed consists of lambda bits.
+     */
+    const size_t seed_len =
+        params->lambda / 8;
+    /*
+     * ------------------------------------------------------------
+     * 1. Sample random seed r
+     * ------------------------------------------------------------
+     */
+
+    uint8_t seed[seed_len];
+
+    if (!random->rng(
+            random->ctx,
+            seed,
+            seed_len))
+        return NULL;
+
+    
+
+    uint8_t *encoded = high_encode_ws(params_ptr, key_ptr, message, message_bits, random, output_bits, seed);
+
+
+    return encoded;
+
+
+}
+
+
 /*
  * ================================================================
  * Encode
@@ -211,13 +280,14 @@ fail:
  */
 
 static uint8_t *
-high_encode(
+high_encode_ws(
     const void *params_ptr,
     const MBPRC_EncKey *key_ptr,
     const uint8_t *message,
     size_t message_bits,
     RandomnessSource *random,
-    size_t *output_bits)
+    size_t *output_bits,
+    const uint8_t *seed)
 {
     const PRCHigh_Params *params =
         (const PRCHigh_Params *)params_ptr;
@@ -230,7 +300,6 @@ high_encode(
         !message ||
         !random ||
         !output_bits){
-            printf("t1\n");
             return NULL;
 
         }
@@ -256,7 +325,6 @@ high_encode(
     const size_t seed_len =
         params->lambda / 8;
 
-    printf("t3\n");
     /*
      * Determine the ECC codeword size.
      */
@@ -266,28 +334,12 @@ high_encode(
             message_len
         );
 
-    printf("t4\n");
 
     if (ecc_len == 0)
         return NULL;
 
-    printf("t4a\n");
 
-    /*
-     * ------------------------------------------------------------
-     * 1. Sample random seed r
-     * ------------------------------------------------------------
-     */
-
-    uint8_t seed[seed_len];
-
-    if (!random->rng(
-            random->ctx,
-            seed,
-            seed_len))
-        return NULL;
-
-    printf("t5\n");
+    
     /*
      * ------------------------------------------------------------
      * 2. Encode seed using low PRC
@@ -302,8 +354,6 @@ high_encode(
     uint8_t *low_codeword =
         calloc(1, low_capacity);
 
-    printf("t6\n");
-
     if (!low_codeword)
         return NULL;
 
@@ -313,8 +363,6 @@ high_encode(
         free(low_codeword);
         return NULL;
     }
-
-    printf("t7\n");
 
     uint8_t *encoded_seed =
         mbprc_encode(
@@ -335,8 +383,6 @@ high_encode(
 
         return NULL;
     }
-
-    printf("t8\n");
 
     //save_codeword("test-enc.txt", encoded_seed, low_output_bits);
 
@@ -360,8 +406,6 @@ high_encode(
         return NULL;
     }
 
-    printf("t9\n");
-
     size_t actual_ecc_len = 0;
 
     if (ecc_encode(
@@ -378,8 +422,6 @@ high_encode(
         return NULL;
     }
 
-    printf("t10\n");
-
     /*
      * ------------------------------------------------------------
      * 4. Generate PRG(r)
@@ -395,7 +437,6 @@ high_encode(
         return NULL;
     }
 
-    printf("t11\n");
 
     //const CSPRG *csprg = csprg_sodium();
     RandomnessSource rand = csprg_randomness(seed, seed_len);
@@ -409,8 +450,6 @@ high_encode(
 
         return NULL;
     }
-
-    printf("t12\n");
 
     /*
      * ------------------------------------------------------------
@@ -539,14 +578,17 @@ high_encode(
  * ================================================================
  */
 
+
+
 static int
-high_decode(
+high_decode_ws(
     const void *params_ptr,
     const MBPRC_DecKey *key_ptr,
     const uint8_t *ciphertext,
     size_t ciphertext_bits,
     uint8_t *message_out,
-    size_t *message_bits_out)
+    size_t *message_bits_out,
+    uint8_t *seed_out)
 {
     const PRCHigh_Params *params =
         (const PRCHigh_Params *)params_ptr;
@@ -558,6 +600,7 @@ high_decode(
         !key ||
         !ciphertext ||
         !message_out ||
+        !seed_out ||
         !message_bits_out)
         return 0;
 
@@ -660,14 +703,7 @@ high_decode(
     const size_t seed_len =
         params->lambda / 8;
 
-    uint8_t *seed =
-        calloc(1, seed_len);
-
-    if (!seed) {
-        free(encoded_seed);
-        free(y1);
-        return 0;
-    }
+    
 
     size_t seed_bits = 0;
 
@@ -678,13 +714,12 @@ high_decode(
             key->low_dec_key,
             encoded_seed,
             low_bits,
-            seed,
+            seed_out,
             &seed_bits) ||
         seed_bits != params->lambda) {
 
         free(encoded_seed);
         free(y1);
-        free(seed);
 
         return 0;
     }
@@ -702,22 +737,18 @@ high_decode(
 
     if (!mask) {
         free(y1);
-        free(seed);
         return 0;
     }
 
-    RandomnessSource rand = csprg_randomness(seed, seed_len);
+    RandomnessSource rand = csprg_randomness(seed_out, seed_len);
 
     if (!rand.rng(rand.ctx, mask, ecc_bytes)) {
 
         free(y1);
-        free(seed);
         free(mask);
 
         return 0;
     }
-
-    free(seed);
 
     /*
      * ------------------------------------------------------------
@@ -778,6 +809,50 @@ high_decode(
 
     return 1;
 }
+
+
+
+ static int high_decode(const void *params_ptr,
+    const MBPRC_DecKey *key_ptr,
+    const uint8_t *ciphertext,
+    size_t ciphertext_bits,
+    uint8_t *message_out,
+    size_t *message_bits_out){
+
+
+    const PRCHigh_Params *params =
+        (const PRCHigh_Params *)params_ptr;
+
+    const MBPRC_DecKey *key =
+        (const MBPRC_DecKey *)key_ptr;
+
+    if (!params ||
+        !key ||
+        !ciphertext ||
+        !message_out ||
+        !message_bits_out)
+        return 0;
+
+    const size_t seed_len =
+        params->lambda / 8;
+
+
+    uint8_t *seed =
+        calloc(1, seed_len);
+
+    if (!seed) {
+        free(seed);
+        return 0;
+    }
+
+
+    uint8_t *decoded = high_encode_ws(params_ptr, key_ptr, ciphertext, ciphertext_bits, message_out, message_bits_out, seed);
+
+    //seed not further used in regular mode
+    free(seed);
+
+    return decoded;
+ }
 
 
 /*
@@ -862,6 +937,20 @@ prc_high(
 
         .free_dec_key =
             high_free_dec_key
+    };
+
+}
+
+
+MBPRC_RR
+prc_high_rr(
+    const PRCHigh_Params *params)
+{
+
+    return (MBPRC_RR) {
+        .base = prc_high(params),
+        .decode_ws = high_decode_ws,
+        .encode_ws = high_encode_ws
     };
 
 }

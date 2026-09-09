@@ -437,7 +437,6 @@ prc_low_encode(
 
         if (get_bit(message, i) == 1) {
 
-            //printf("here\n");
             encoded_block =
                 zbprc_encode(
                     params->underlying,

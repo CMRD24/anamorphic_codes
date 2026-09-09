@@ -1236,3 +1236,19 @@ prc_pp(
     return prc;
 
 }
+
+
+ZBPRC_RR
+prc_pp_rr(
+   const PPParams *params)
+{
+    ZBPRC_RR prc_rr = {
+
+        .base = prc_pp(params),
+        .decode_ws = zbprc_pp_decode_ws,
+        .encode_ws = zbprc_pp_encode_ws
+    };
+
+    return prc_rr;
+
+}

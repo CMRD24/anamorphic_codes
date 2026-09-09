@@ -7,6 +7,7 @@
 #include "../../../utils/random.h"
 #include "../../../utils/ecc.h"
 #include "../zerobit_prc.h"
+#include "../zerobit_prc_rr.h"
 
 
 typedef struct {
@@ -67,6 +68,11 @@ typedef struct {
 
 ZBPRC
 prc_pp(
+    const PPParams *params
+);
+
+ZBPRC_RR
+prc_pp_rr(
     const PPParams *params
 );
 

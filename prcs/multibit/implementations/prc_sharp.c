@@ -187,7 +187,7 @@ sharp_keygen(
     dec->underlying_enc =
         underlying->enc;
 
-    //TODO: should copy enc key, otherwise double free if both keys are freed
+    //TODO: should copy enc key, otherwise double free when both keys are freed
 
     underlying->enc = NULL;
     underlying->dec = NULL;
@@ -958,6 +958,19 @@ prc_sharp(
 
         .free_dec_key =
             sharp_free_dec_key
+    };
+
+    return result;
+}
+
+MBPRC_RR
+prc_sharp_rr(
+    const PRCSharp_Params *params)
+{
+    MBPRC_RR result = {
+        .base = prc_sharp(params),
+        .decode_ws = sharp_decode_ws,
+        .encode_ws = sharp_encode_ws
     };
 
     return result;

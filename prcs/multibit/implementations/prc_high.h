@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "../multibit_prc.h"
+#include "../multibit_prc_rr.h"
 #include "../../../utils/ecc.h"
 
 /*
@@ -68,6 +69,10 @@ typedef struct {
 
 
 MBPRC prc_high(
+    const PRCHigh_Params *params
+);
+
+MBPRC_RR prc_high_rr(
     const PRCHigh_Params *params
 );
 

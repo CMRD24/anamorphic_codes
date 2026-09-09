@@ -237,14 +237,18 @@ cca_keygen(
  * ================================================================
  */
 
+
+
 static uint8_t *
-cca_encode(
+cca_encode_ws(
     const void *vparams,
     const MBPRC_EncKey *vkey,
     const uint8_t *message,
     size_t message_bits,
     RandomnessSource *random,
-    size_t *output_bits)
+    size_t *output_bits,
+    const uint8_t *seed
+)
 {
     const PRC_CCA_Params *params =
         (const PRC_CCA_Params *)vparams;
@@ -266,30 +270,8 @@ cca_encode(
         params->lambda_bits;
 
 
-    /*
-     * ------------------------------------------------------------
-     * 1. Sample r <- {0,1}^lambda
-     * ------------------------------------------------------------
-     */
-
     size_t lambda_bytes =
         bits_to_bytes(lambda);
-
-    uint8_t *r =
-        calloc(1, lambda_bytes);
-
-    if (!r)
-        return NULL;
-
-    if (!random->rng(
-            random->ctx,
-            r,
-            lambda_bytes)) {
-
-        free(r);
-        return NULL;
-    }
-
 
     /*
      * ------------------------------------------------------------
@@ -300,7 +282,6 @@ cca_encode(
     if (lambda >
         SIZE_MAX - message_bits) {
 
-        free(r);
         return NULL;
     }
 
@@ -315,14 +296,14 @@ cca_encode(
 
     if (!rm) {
 
-        free(r);
+        free(seed);
         return NULL;
     }
 
     copy_bits(
         rm,
         0,
-        r,
+        seed,
         0,
         lambda
     );
@@ -379,7 +360,6 @@ cca_encode(
     {
         csprg_randomness_free(&pseudo);
         free(rm);
-        free(r);
 
         return NULL;
     }
@@ -399,7 +379,6 @@ cca_encode(
 
         csprg_randomness_free(&pseudo);
         free(rm);
-        free(r);
 
         return NULL;
     }
@@ -451,9 +430,55 @@ cca_encode(
     csprg_randomness_free(&pseudo);
     free(r2);
     free(rm);
-    free(r);
 
     return ciphertext;
+}
+
+
+
+static uint8_t *cca_encode(
+    const void *vparams,
+    const MBPRC_EncKey *vkey,
+    const uint8_t *message,
+    size_t message_bits,
+    RandomnessSource *random,
+    size_t *output_bits
+){
+
+    const PRC_CCA_Params *params =
+        (const PRC_CCA_Params *)vparams;
+
+    size_t lambda =
+        params->lambda_bits;
+    /*
+     * ------------------------------------------------------------
+     * 1. Sample r <- {0,1}^lambda
+     * ------------------------------------------------------------
+     */
+
+    size_t lambda_bytes =
+        bits_to_bytes(lambda);
+
+    uint8_t *r =
+        calloc(1, lambda_bytes);
+
+    if (!r)
+        return NULL;
+
+    if (!random->rng(
+            random->ctx,
+            r,
+            lambda_bytes)) {
+
+        free(r);
+        return NULL;
+    }
+
+    uint8_t *encoded = cca_encode_ws(vparams, vkey, message, message_bits, random, output_bits, r);
+
+    free(r);
+    return encoded;
+
 }
 
 
@@ -464,13 +489,14 @@ cca_encode(
  */
 
 static int
-cca_decode(
+cca_decode_ws(
     const void *vparams,
     const MBPRC_DecKey *vkey,
     const uint8_t *ciphertext,
     size_t ciphertext_bits,
     uint8_t *message_out,
-    size_t *message_bits_out)
+    size_t *message_bits_out,
+    uint8_t *seed_out)
 {
     const PRC_CCA_Params *params =
         (const PRC_CCA_Params *)vparams;
@@ -600,6 +626,14 @@ cca_decode(
         decoded,
         0,
         rm_bits
+    );
+
+    copy_bits(
+        seed_out,
+        0,
+        decoded,
+        0,
+        lambda
     );
 
 
@@ -780,6 +814,53 @@ cca_decode(
 }
 
 
+cca_decode(
+    const void *vparams,
+    const MBPRC_DecKey *vkey,
+    const uint8_t *ciphertext,
+    size_t ciphertext_bits,
+    uint8_t *message_out,
+    size_t *message_bits_out){
+
+        const PRC_CCA_Params *params =
+        (const PRC_CCA_Params *)vparams;
+
+    const struct MBPRC_DecKey *key =
+        (const struct MBPRC_DecKey *)vkey;
+
+
+    if (!params ||
+        !params->prc ||
+        !key ||
+        !ciphertext ||
+        !message_out ||
+        !message_bits_out)
+        return 0;
+
+
+
+    size_t lambda =
+        params->lambda_bits;
+    
+        size_t lambda_bytes =
+        bits_to_bytes(lambda);
+
+        uint8_t *seed =
+        malloc(lambda_bytes);
+
+        if (!seed) {
+            return 0;
+        }
+
+        int decoded = cca_decode_ws(vparams, vkey, ciphertext, ciphertext_bits, message_out, message_bits_out, seed);
+
+        //regular mode doesn't use seed
+        free(seed);
+
+        return decoded;
+    }
+
+
 /*
  * ================================================================
  * Key destruction
@@ -908,6 +989,21 @@ prc_cca(
 
         .free_dec_key =
             cca_free_dec_key
+    };
+
+    return result;
+}
+
+
+MBPRC_RR
+prc_cca_rr(
+    const PRC_CCA_Params *params)
+{
+    MBPRC_RR result = {
+        .base = prc_cca(params),
+        .decode_ws = cca_decode_ws,
+        .encode_ws = cca_encode_ws
+        
     };
 
     return result;
