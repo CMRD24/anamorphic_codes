@@ -41,7 +41,7 @@ prc_cca(
 );
 
 MBPRC_RR
-prc_cca_cc(
+prc_cca_rr(
     const PRC_CCA_Params *params
 );
 

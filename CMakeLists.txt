@@ -33,6 +33,7 @@ find_library(M_LIBRARY m REQUIRED)
 
 add_library(prc_utils STATIC
     utils/hamming74.c
+    utils/none_ecc.c
     utils/random_linux.c
     utils/random_utils.c
     utils/matrix.c
@@ -82,6 +83,7 @@ target_link_libraries(prc_ldpc PRIVATE
 
 add_library(prc_pp_impl STATIC
     prcs/zerobit/implementations/prc_pp.c
+    prcs/anamorphism/aprc_rr.c
 )
 
 target_include_directories(prc_pp_impl PUBLIC

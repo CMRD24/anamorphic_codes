@@ -296,7 +296,6 @@ cca_encode_ws(
 
     if (!rm) {
 
-        free(seed);
         return NULL;
     }
 
@@ -814,6 +813,7 @@ cca_decode_ws(
 }
 
 
+static int
 cca_decode(
     const void *vparams,
     const MBPRC_DecKey *vkey,

@@ -13,36 +13,41 @@
 
 typedef struct {
 
+    //number of seed bits
+    const size_t seed_len;
+
     //number of indication bits
-    const size_t k;
+    const size_t indication_len;
 
     //number of regular messages for one anamorphic message
     const size_t mu;
 
     //the regular PRC
 
-    const ZBPRC_RR prc_rr;
+    const ZBPRC_RR *prc_rr;
 
 } aZBPRC_RR_Params;
 
 typedef struct {
 
+    const size_t seed_len;
+
     //number of indication bits
-    const size_t k;
+    const size_t indication_len;
 
     //number of regular messages for one anamorphic message
     const size_t mu;
 
     //the regular PRC
 
-    const MBPRC_RR prc_rr;
+    const MBPRC_RR *prc_rr;
 
 } aMBPRC_RR_Params;
 
 
 typedef struct {
     const uint8_t *prf_key;
-    const uint8_t *encryption_key;
+    const uint8_t  *encryption_key;
 
 } APRC_RR_Keys;
 
@@ -72,23 +77,22 @@ typedef struct {
     //returns an array of codewords
     uint8_t **(*aencode)(
         const aZBPRC_RR_Params *aparams,
+        const ZBPRC_EncKey *reg_key,
         const APRC_RR_Keys *dkey,
-        const uint8_t *reg_messages,
-        size_t reg_message_bits,
         const uint8_t *ana_message,
-        size_t ana_message_bits,
         RandomnessSource *random,
         size_t *output_bits
     );
 
 
+    //returns 1 on success 0 on failure
     int (*adecode)(
         const aZBPRC_RR_Params *aparams,
+        const ZBPRC_DecKey *reg_key,
         const APRC_RR_Keys *dkey,
-        const uint8_t **ciphertexts,
+        const uint8_t *const *codewords,
         size_t ciphertext_bits,
-        const uint8_t *ana_message,
-        const size_t *ana_message_bits
+        uint8_t *ana_message
     );
 
 
@@ -99,8 +103,7 @@ typedef struct {
      */
 
     void (*free_akey)(
-        const void *params,
-        const void *aparams,
+        const aZBPRC_RR_Params *aparams,
         APRC_RR_Keys *key
     );
 
@@ -134,11 +137,11 @@ typedef struct {
     //returns an array of codewords
     uint8_t **(*aencode)(
         const aMBPRC_RR_Params *aparams,
+        const MBPRC_EncKey *reg_key,
         const APRC_RR_Keys *dkey,
         const uint8_t **reg_messages,
         size_t reg_message_bits,
         const uint8_t *ana_message,
-        size_t ana_message_bits,
         RandomnessSource *random,
         size_t *output_bits
     );
@@ -146,11 +149,12 @@ typedef struct {
 
     int (*adecode)(
         const aMBPRC_RR_Params *aparams,
-        const APRC_RR_Keys *dkey,
-        const uint8_t **ciphertexts,
-        size_t ciphertext_bits,
-        const uint8_t *ana_message,
-        const size_t *ana_message_bits
+    const MBPRC_DecKey *reg_key,
+    const APRC_RR_Keys *dkey,
+    const uint8_t *const *codewords,
+    size_t ciphertext_bits,
+    uint8_t *ana_message,
+    size_t reg_message_bits //only needed to allocate right amount
     );
 
 
@@ -171,7 +175,9 @@ typedef struct {
 } aMBPRC_RR;
 
 
+aZBPRC_RR aZBPRC_RR_init(const aZBPRC_RR_Params *aparams);
 
+aMBPRC_RR aMBPRC_RR_init(const aMBPRC_RR_Params *aparams);
 
 
 #endif /* AZERO_BIT_PRC_H */

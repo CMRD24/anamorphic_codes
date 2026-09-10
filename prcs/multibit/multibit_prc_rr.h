@@ -16,8 +16,10 @@ typedef struct {
 
 
     uint8_t *(*encode_ws)(
-        const void *params,
-        const MBPRC_EncKey *key,
+        const void *params_ptr,
+        const MBPRC_EncKey *key_ptr,
+        const uint8_t *message,
+        size_t message_bits,
         RandomnessSource *random,
         size_t *output_bits,
         const uint8_t *seed
@@ -25,10 +27,12 @@ typedef struct {
 
 
     int (*decode_ws)(
-        const void *params,
-        const MBPRC_DecKey *key,
+        const void *params_ptr,
+        const MBPRC_DecKey *key_ptr,
         const uint8_t *ciphertext,
         size_t ciphertext_bits,
+        uint8_t *message_out,
+        size_t *message_bits_out,
         uint8_t *seed_out
     );
     

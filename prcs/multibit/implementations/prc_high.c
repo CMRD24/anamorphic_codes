@@ -205,73 +205,6 @@ fail:
 
 
 
-high_encode(const void *params_ptr,
-    const MBPRC_EncKey *key_ptr,
-    const uint8_t *message,
-    size_t message_bits,
-    RandomnessSource *random,
-    size_t *output_bits){
-
-
-    const PRCHigh_Params *params =
-        (const PRCHigh_Params *)params_ptr;
-
-    const MBPRC_EncKey *key =
-        (const MBPRC_EncKey *)key_ptr;
-
-    if (!params ||
-        !key ||
-        !message ||
-        !random ||
-        !output_bits){
-            return NULL;
-
-        }
-        
-
-    
-    /*
-     * The ECC interface operates on whole bytes.
-     */
-    if (message_bits % 8 != 0){
-        printf("Message bits must be devisible by 8\n");
-        return NULL;
-    }
-    
-        
-
-    const size_t message_len =
-        message_bits / 8;
-
-    /*
-     * The seed consists of lambda bits.
-     */
-    const size_t seed_len =
-        params->lambda / 8;
-    /*
-     * ------------------------------------------------------------
-     * 1. Sample random seed r
-     * ------------------------------------------------------------
-     */
-
-    uint8_t seed[seed_len];
-
-    if (!random->rng(
-            random->ctx,
-            seed,
-            seed_len))
-        return NULL;
-
-    
-
-    uint8_t *encoded = high_encode_ws(params_ptr, key_ptr, message, message_bits, random, output_bits, seed);
-
-
-    return encoded;
-
-
-}
-
 
 /*
  * ================================================================
@@ -571,6 +504,71 @@ high_encode_ws(
 
 
 
+static uint8_t *
+high_encode(const void *params_ptr,
+    const MBPRC_EncKey *key_ptr,
+    const uint8_t *message,
+    size_t message_bits,
+    RandomnessSource *random,
+    size_t *output_bits){
+
+
+    const PRCHigh_Params *params =
+        (const PRCHigh_Params *)params_ptr;
+
+    const MBPRC_EncKey *key =
+        (const MBPRC_EncKey *)key_ptr;
+
+    if (!params ||
+        !key ||
+        !message ||
+        !random ||
+        !output_bits){
+            return NULL;
+
+        }
+        
+
+    
+    /*
+     * The ECC interface operates on whole bytes.
+     */
+    if (message_bits % 8 != 0){
+        printf("Message bits must be devisible by 8\n");
+        return NULL;
+    }
+    
+    
+
+    /*
+     * The seed consists of lambda bits.
+     */
+    const size_t seed_len =
+        params->lambda / 8;
+    /*
+     * ------------------------------------------------------------
+     * 1. Sample random seed r
+     * ------------------------------------------------------------
+     */
+
+    uint8_t seed[seed_len];
+
+    if (!random->rng(
+            random->ctx,
+            seed,
+            seed_len))
+        return NULL;
+
+    
+
+    uint8_t *encoded = high_encode_ws(params_ptr, key_ptr, message, message_bits, random, output_bits, seed);
+
+
+    return encoded;
+
+
+}
+
 
 /*
  * ================================================================
@@ -846,7 +844,7 @@ high_decode_ws(
     }
 
 
-    uint8_t *decoded = high_encode_ws(params_ptr, key_ptr, ciphertext, ciphertext_bits, message_out, message_bits_out, seed);
+    int decoded = high_decode_ws(params_ptr, key_ptr, ciphertext, ciphertext_bits, message_out, message_bits_out, seed);
 
     //seed not further used in regular mode
     free(seed);

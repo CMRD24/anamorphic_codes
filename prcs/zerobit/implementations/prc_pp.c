@@ -886,11 +886,13 @@ zbprc_pp_decode_ws(
         !ciphertext)
         return 0;
 
+
     size_t expected_bits =
         key->n * key->symbol_bits;
 
     if (ciphertext_bits != expected_bits)
         return 0;
+
 
     size_t encoded_bytes;
 
@@ -900,7 +902,7 @@ zbprc_pp_decode_ws(
             &encoded_bytes) != 0)
         return 0;
 
-
+        
     /*
      * ------------------------------------------------------------
      * 1. Remove OTP.
@@ -916,6 +918,8 @@ zbprc_pp_decode_ws(
 
     if (!unmasked)
         return 0;
+
+        
 
     for (size_t i = 0; i < key->n; i++) {
 
@@ -944,6 +948,7 @@ zbprc_pp_decode_ws(
     }
 
 
+
     /*
      * ------------------------------------------------------------
      * 2. Undo sigma and pi.
@@ -966,6 +971,7 @@ zbprc_pp_decode_ws(
         free(unmasked);
         return 0;
     }
+
 
     for (size_t i = 0; i < key->n; i++) {
 
@@ -992,6 +998,7 @@ zbprc_pp_decode_ws(
             symbol
         );
     }
+
 
     free(unmasked);
 
@@ -1026,7 +1033,7 @@ zbprc_pp_decode_ws(
         return 0;
     }
 
-
+    
     /*
      * ------------------------------------------------------------
      * 4. Re-encode.
@@ -1040,6 +1047,8 @@ zbprc_pp_decode_ws(
         free(codeword);
         return 0;
     }
+
+    
 
     size_t reencoded_len =
         encoded_bytes;
@@ -1057,7 +1066,7 @@ zbprc_pp_decode_ws(
         return 0;
     }
 
-
+    
 
     /*
      * ------------------------------------------------------------
@@ -1081,6 +1090,8 @@ zbprc_pp_decode_ws(
     if ((double)distance >
         params->delta * (double)key->n)
         return 0;
+
+        
 
     return 1;
 }

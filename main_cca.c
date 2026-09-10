@@ -3,6 +3,7 @@
 #include "prcs/multibit/implementations/prc_cca.h"
 #include "utils/hamming74.h"
 #include "utils/random.h"
+#include "prcs/anamorphism/aprc_rr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,7 @@
 
 
 #define MESSAGE_SIZE 4
+#define AMESSAGE_SIZE 4
 
 
 /*
@@ -265,13 +267,27 @@ main(void)
             .delta = 0.05
         };
         
-        MBPRC prc = prc_cca(&high_params);
+        MBPRC_RR prc_rr = prc_cca_rr(&high_params);
+
+
+
+        MBPRC prc = prc_rr.base;
+
+        aMBPRC_RR_Params aparams = {
+            .prc_rr = &prc_rr,
+            .mu = 32 + 1 + AMESSAGE_SIZE / 8, //AMESSAGE_SIZE bits / 64
+            .indication_len = 32,
+            .seed_len = 64};
+
+        aMBPRC_RR aprc = aMBPRC_RR_init(&aparams);
 
 /*
  * ============================================================
  * Key generation
  * ============================================================
  */
+
+ APRC_RR_Keys *dkey = aprc.akeygen(&aparams, &random);
 
 MBPRC_Keys *keys =
     mbprc_keygen(
@@ -482,6 +498,103 @@ if (strncmp(line, "encode", 6) == 0 &&
 encode_continue:
     continue;
 }
+
+
+ /*
+         * --------------------------------------------------------
+         * aencode
+         * --------------------------------------------------------
+         */
+
+        if (strncmp(line, "aencode", 7) == 0 &&
+            (line[7] == ' ' || line[7] == '\0'))
+        {
+
+            /*
+             * Skip whitespace after "encode".
+             */
+            char *argument = line + 7;
+
+            while (*argument == ' ')
+                ++argument;
+
+            /*
+             * Require exactly AMESSAGE_SIZE ASCII characters.
+             */
+            if (strlen(argument) != AMESSAGE_SIZE)
+            {
+
+                fprintf(
+                    stderr,
+                    "Usage: encode <16 ASCII characters>\n");
+
+                continue;
+            }
+
+            /*
+             * Convert the MESSAGE_SIZE ASCII characters to a byte array.
+             */
+            uint8_t amessage[AMESSAGE_SIZE];
+
+            for (size_t i = 0; i < AMESSAGE_SIZE; ++i)
+            {
+
+                if ((unsigned char)argument[i] > 127)
+                {
+
+                    fprintf(
+                        stderr,
+                        "Error: message must contain only ASCII characters.\n");
+
+                    goto encode_continue;
+                }
+
+                amessage[i] = (uint8_t)argument[i];
+            }
+
+            size_t output_bits = 0;
+
+            //TODO: read in regular messages from file
+
+            uint8_t **codewords = aprc.aencode(&aparams, keys->enc, dkey, amessage, &random, &output_bits);
+
+            if (codewords == NULL)
+            {
+
+                fprintf(
+                    stderr,
+                    "Encoding failed.\n");
+
+                continue;
+            }
+
+            if (!save_codewords(
+                    "a_pp.txt",
+                    codewords, aparams.mu,
+                    output_bits))
+            {
+
+                fprintf(
+                    stderr,
+                    "Failed to write low.txt.\n");
+            }
+            else
+            {
+
+                printf(
+                    "Encoded message \"%s\" (%zu ciphertext bits) "
+                    "to a_pp.txt.\n",
+                    argument,
+                    output_bits);
+            }
+
+            free(codewords);
+
+            continue;
+
+        encode_continue:
+            continue;
+        }
 
 
 /*
