@@ -73,6 +73,7 @@ APRC_Keys *
 ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_keys,
             RandomnessSource *random)
 {
+    //TODO get r_prime from aparams
     const A_LDPCParams *aparams =
         (const A_LDPCParams *)aparams_ptr;
 

@@ -5,6 +5,8 @@
 #include "utils/random.h"
 #include "prcs/anamorphism/aprc_rr.h"
 
+#include "main_utils.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +16,7 @@
 
 
 #define MESSAGE_SIZE 4
-#define AMESSAGE_SIZE 4
+#define AMESSAGE_SIZE 8
 
 
 /*
@@ -63,6 +65,56 @@ save_codeword(const char *filename,
     fclose(file);
 
     return 1;
+}
+
+
+uint8_t **readlines(const char *filename, size_t l, size_t k)
+{
+    FILE *file = fopen(filename, "r");
+    if (file == NULL)
+        return NULL;
+
+    uint8_t **lines = malloc(l * sizeof(uint8_t *));
+    if (lines == NULL) {
+        fclose(file);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < l; i++) {
+        lines[i] = malloc(k * sizeof(uint8_t));
+        if (lines[i] == NULL) {
+            for (size_t j = 0; j < i; j++)
+                free(lines[j]);
+
+            free(lines);
+            fclose(file);
+            return NULL;
+        }
+
+        size_t j = 0;
+        int c;
+
+        while (j < k && (c = fgetc(file)) != EOF && c != '\n') {
+            lines[i][j++] = (uint8_t)c;
+        }
+
+        /* If the line is shorter than k, zero-pad it */
+        while (j < k)
+            lines[i][j++] = 0;
+
+        if (c == EOF && i + 1 < l) {
+            /* Not enough lines */
+            for (size_t x = 0; x <= i; x++)
+                free(lines[x]);
+
+            free(lines);
+            fclose(file);
+            return NULL;
+        }
+    }
+
+    fclose(file);
+    return lines;
 }
 
 
@@ -275,9 +327,9 @@ main(void)
 
         aMBPRC_RR_Params aparams = {
             .prc_rr = &prc_rr,
-            .mu = 32 + 1 + AMESSAGE_SIZE / 8, //AMESSAGE_SIZE bits / 64
+            .mu = 32 + 1 + AMESSAGE_SIZE / 2, //AMESSAGE_SIZE bits / 16
             .indication_len = 32,
-            .seed_len = 64};
+            .seed_len = 16};
 
         aMBPRC_RR aprc = aMBPRC_RR_init(&aparams);
 
@@ -495,8 +547,6 @@ if (strncmp(line, "encode", 6) == 0 &&
 
     continue;
 
-encode_continue:
-    continue;
 }
 
 
@@ -554,9 +604,10 @@ encode_continue:
 
             size_t output_bits = 0;
 
-            //TODO: read in regular messages from file
 
-            uint8_t **codewords = aprc.aencode(&aparams, keys->enc, dkey, amessage, &random, &output_bits);
+            uint8_t **reg_messages = readlines("cca_reg_msgs.txt", aparams.mu, MESSAGE_SIZE);
+
+            uint8_t **codewords = aprc.aencode(&aparams, keys->enc, dkey, reg_messages, MESSAGE_SIZE*8, amessage, &random, &output_bits);
 
             if (codewords == NULL)
             {
@@ -569,7 +620,7 @@ encode_continue:
             }
 
             if (!save_codewords(
-                    "a_pp.txt",
+                    "a_cca.txt",
                     codewords, aparams.mu,
                     output_bits))
             {
@@ -583,7 +634,7 @@ encode_continue:
 
                 printf(
                     "Encoded message \"%s\" (%zu ciphertext bits) "
-                    "to a_pp.txt.\n",
+                    "to a_cca.txt.\n",
                     argument,
                     output_bits);
             }
@@ -593,6 +644,68 @@ encode_continue:
             continue;
 
         encode_continue:
+            continue;
+        }
+
+
+         /*
+         * --------------------------------------------------------
+         * adecode
+         * --------------------------------------------------------
+         */
+
+        if (strcmp(line, "adecode") == 0)
+        {
+
+            size_t num_codewords = 0;
+            size_t codeword_bits = 0;
+
+            uint8_t **codewords =
+                load_codewords(
+                    "a_cca.txt",
+                    &num_codewords, &codeword_bits);
+
+
+            if (codewords == NULL)
+            {
+
+                fprintf(
+                    stderr,
+                    "Failed to read a_cca.txt.\n");
+
+                continue;
+            }
+
+            uint8_t amessage[AMESSAGE_SIZE] = {0};
+
+            int result = aprc.adecode(&aparams, keys->dec, dkey, (const uint8_t *const *)codewords, codeword_bits, amessage, MESSAGE_SIZE*8);
+
+            if (result == 1)
+            {
+
+                /*
+                 * Convert the decoded bytes back to ASCII.
+                 */
+                char decoded[AMESSAGE_SIZE + 1];
+
+                for (size_t i = 0; i < AMESSAGE_SIZE; ++i)
+                    decoded[i] = (char)amessage[i];
+
+                decoded[AMESSAGE_SIZE] = '\0';
+
+                printf(
+                    "Decoded: \"%s\"\n",
+                    decoded);
+            }
+            else
+            {
+
+                printf(
+                    "Decoding failed.\n");
+            }
+
+            free(codewords);
+
             continue;
         }
 

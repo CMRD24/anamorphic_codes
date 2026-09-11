@@ -39,6 +39,7 @@ add_library(prc_utils STATIC
     utils/matrix.c
     utils/helpers.c
     utils/csprg_sodium.c
+    main_utils.c
 )
 
 target_include_directories(prc_utils PUBLIC
@@ -83,7 +84,7 @@ target_link_libraries(prc_ldpc PRIVATE
 
 add_library(prc_pp_impl STATIC
     prcs/zerobit/implementations/prc_pp.c
-    prcs/anamorphism/aprc_rr.c
+    prcs/anamorphism/azbprc_rr.c
 )
 
 target_include_directories(prc_pp_impl PUBLIC
@@ -221,6 +222,7 @@ add_library(prc_cca_impl STATIC
     prcs/zerobit/implementations/prc_ldpc.c
     prcs/multibit/implementations/prc_low.c
     prcs/multibit/implementations/prc_cca.c
+    prcs/anamorphism/ambprc_rr.c
 )
 
 target_include_directories(prc_cca_impl PUBLIC

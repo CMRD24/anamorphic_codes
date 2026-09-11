@@ -237,7 +237,7 @@ main(void)
      */
 
     ZBPRC underlying =
-        ldpc_zbprc(&params);
+        prc_ldpc(&params);
 
 
     /*
@@ -262,7 +262,7 @@ main(void)
     };
 
     ZBPRC prc =
-        prc_dc_create(&dc_params);
+        prc_dc(&dc_params);
 
 
     /*

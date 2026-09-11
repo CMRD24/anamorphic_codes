@@ -242,6 +242,8 @@ uint8_t **aencode(
 )
 {
 
+    printf("ma1\n");
+
     if (aparams == NULL ||
         dkey == NULL ||
         dkey->prf_key == NULL ||
@@ -255,6 +257,8 @@ uint8_t **aencode(
         return NULL;
     }
 
+    printf("ma2\n");
+
 
     const size_t k  = aparams->seed_len;
     const size_t mu = aparams->mu;
@@ -262,6 +266,8 @@ uint8_t **aencode(
 
     if (k == 0 || mu == 0 || z > mu)
         return NULL;
+
+    printf("ma2a\n");
 
     /*
      * The construction requires the SKE ciphertext to contain
@@ -304,10 +310,13 @@ uint8_t **aencode(
                 ana_message,
                 ana_message_bits/8,
                 encrypted)) {
+            printf("here\n");
             free(encrypted);
             return NULL;
         }
     }
+
+    printf("ma3\n");
 
 
     /*
@@ -327,6 +336,7 @@ uint8_t **aencode(
         return NULL;
     }
 
+    printf("ma4\n");
 
     /*
      * Generate the indication seeds.
@@ -360,6 +370,8 @@ uint8_t **aencode(
         ) != 0);
     }
 
+    printf("ma5\n");
+
 
     /*
      * r_{z+1} || ... || r_mu = SKEEnc(ek,m_a)
@@ -385,6 +397,8 @@ uint8_t **aencode(
         free(encrypted);
         return NULL;
     }
+
+    printf("ma6\n");
 
     size_t codeword_bits = 0;
 
@@ -445,6 +459,8 @@ uint8_t **aencode(
         }
     }
 
+    printf("ma7\n");
+
 
     *output_bits = codeword_bits;
 
@@ -476,6 +492,8 @@ int adecode(
 )
 {
 
+    printf("dma1\n");
+
     if (aparams == NULL ||
         dkey == NULL ||
         dkey->prf_key == NULL ||
@@ -486,6 +504,8 @@ int adecode(
         return 0;
     }
 
+    printf("dma2\n");
+
 
     const size_t k  = aparams->seed_len;
     const size_t mu = aparams->mu;
@@ -493,6 +513,8 @@ int adecode(
 
     if (k == 0 || mu == 0 || z > mu)
         return 0;
+
+    printf("dma3\n");
 
 
     const size_t encrypted_bits = k * (mu - z);
@@ -515,9 +537,13 @@ int adecode(
     for (size_t i = 0; i < mu; i++) {
 
         //regular messages are irrelevant for adecode
-        uint8_t *reg_msg =  calloc(1, reg_message_bits+7/8);;
+        size_t reg_message_bytes = reg_message_bits+7/8;
+        uint8_t *reg_msg =  calloc(1, reg_message_bytes);
 
         size_t reg_bits_out = 0;
+
+        printf("ciphertext bits: %zu", ciphertext_bits);
+        printf("reg_message bits: %zu", reg_message_bits);
 
         if (!aparams->prc_rr->decode_ws(
                 aparams->prc_rr->base.params,
@@ -525,7 +551,7 @@ int adecode(
                 codewords[i],
                 ciphertext_bits,
                 reg_msg,
-                reg_bits_out,
+                &reg_bits_out,
                 seeds + i * seed_bytes
             )) {
 
@@ -534,9 +560,14 @@ int adecode(
             free(seeds);
             return 0;
         }
+        else{
+            printf("success\n");
+        }
 
 
     }
+
+    printf("dma4\n");
 
 
 
@@ -555,6 +586,8 @@ int adecode(
             seed_bytes
         );
 
+        printf("%u\n", bit);
+
 
         if (bit != 0) {
             sodium_memzero(seeds, mu * seed_bytes);
@@ -562,6 +595,8 @@ int adecode(
             return 0;
         }
     }
+
+    printf("dma6\n");
 
 
     /*
@@ -601,6 +636,8 @@ int adecode(
         }
     }
 
+    printf("dma7\n");
+
 
     /*
      * SKE.Dec(ek, r_{z+1} || ... || r_mu)
@@ -620,6 +657,8 @@ int adecode(
 
     sodium_memzero(seeds, mu * seed_bytes);
     free(seeds);
+
+    printf("dma8\n");
 
 
     return result;
