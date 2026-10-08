@@ -61,4 +61,4 @@ int rlnc_adecode(
     size_t received_count,
     const unsigned char *akey);
 
-#endif
+#endif /* RLNC_H */

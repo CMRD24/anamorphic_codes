@@ -214,7 +214,7 @@ static int command_test(
             cfg.generation_size,
             source_count
         );
-
+        
         free_content(source_content, source_count);
         return 1;
     }
