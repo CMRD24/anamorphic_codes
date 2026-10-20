@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../utils/random_utils.h"
-#include <sodium.h>
 
 /*
  * Primitive / irreducible polynomials for GF(2^m).
@@ -454,145 +453,10 @@ int rlnc_encode(
 }
 
 
-// anamorphic:
-
-uint8_t prf_bit(const unsigned char *key,
-                const unsigned char *input,
-                size_t input_len)
-{
-    unsigned char output[crypto_generichash_BYTES];
-
-    crypto_generichash(
-        output,
-        sizeof(output),
-        input,
-        input_len,
-        key,
-        crypto_generichash_KEYBYTES
-    );
-
-    return output[0] & 1;
-}
-
-//todo: free akey method
-
-uint8_t *rlnc_akeygen(){
-    uint8_t *akey = malloc(crypto_generichash_KEYBYTES);
-    
-    crypto_generichash_keygen(akey);
-    return akey;
-}
-
-int rlnc_source_aencode(
-    const rlnc_config_t *cfg,
-    const rlnc_packet_t *packets,
-    size_t packet_count,
-    rlnc_packet_t *out,
-    RandomnessSource *rng,
-    const unsigned char *akey,
-    uint8_t amessage
-
-)
-{
-    if (!rlnc_config_valid(cfg) ||
-        packets == NULL ||
-        out == NULL ||
-        rng == NULL)
-        return -1;
-
-    if (packet_count == 0)
-        return -1;
-
-    if (packet_count != cfg->generation_size){
-        //only source can encode anamorphic message.
-        return -1;
-    }
-
-    /*
-     * The local encoding vector belongs to this node and therefore
-     * has one coefficient for every packet available to this node.
-     */
-    uint8_t *local_vector =
-        malloc(packet_count * sizeof(uint8_t));
-
-    if (local_vector == NULL)
-        return -1;
-
-    /*
-     * Sample the local encoding vector.
-     */
-    do {
-        if (rlnc_sample_local_encoding_vector(
-            cfg,
-            packet_count,
-            rng,
-            local_vector) != 0) {
-
-        free(local_vector);
-        return -1;
-    }
-    }
-
-    while(prf_bit(akey, local_vector, packet_count)!=amessage);
-    
-
-    /*
-     * Encode using the sampled local encoding vector.
-     *
-     * rlnc_encode_with_vector() derives the outgoing global
-     * encoding vector from the incoming global vectors.
-     */
-    const int result =
-        rlnc_encode_with_vector(
-            cfg,
-            packets,
-            packet_count,
-            local_vector,
-            out);
-
-    free(local_vector);
-
-    return result;
-}
-
 
 /* -------------------------------------------------------------------------
  * Decoding
  * ------------------------------------------------------------------------- */
-
-int rlnc_adecode(
-    const rlnc_config_t *cfg,
-    const rlnc_packet_t *received,
-    size_t received_count,
-    const unsigned char *akey)
-{
-
-
-
-    if (!rlnc_config_valid(cfg) ||
-        received == NULL ||
-        received_count == 0 ||
-        akey == NULL)
-        return -1;
-
-    int ana_bit = -1;
-
-    for (size_t i = 0; i < received_count; ++i) {
-        uint8_t current_bit =
-            prf_bit(akey, received[i].global, cfg->generation_size);
-
-
-        if (ana_bit == -1) {
-            ana_bit = current_bit;
-        } else if (current_bit != ana_bit) {
-            return -1;
-        }
-    }
-
-    return ana_bit;
-
-    
-}
 
 
 int rlnc_decode(

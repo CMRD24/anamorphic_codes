@@ -243,6 +243,32 @@ target_link_libraries(prc_cca PRIVATE
 
 
 # ============================================================
+# RLNC (regular + anamorphic)
+# ============================================================
+
+add_library(rlnc_impl STATIC
+    rlnc/rlnc.c
+    rlnc/arlnc.c
+    rlnc/gf_ext.c
+)
+
+target_include_directories(rlnc_impl PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(rlnc_impl PUBLIC
+    prc_utils
+)
+
+add_executable(rlnc
+    rlnc/main.c
+)
+
+target_link_libraries(rlnc PRIVATE
+    rlnc_impl
+)
+
+# ============================================================
 # PP PRC
 # ============================================================
 

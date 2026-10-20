@@ -173,23 +173,31 @@ static void print_packet_payload(
 
 static int command_test(
     const char *content,
-    size_t generated_packets, int ana_msg)
+    size_t generated_packets, const char *ana_msg)
 {
     /*
      * --------------------------------------------------------
      * RLNC configuration
      * --------------------------------------------------------
      *
-     * We use F_251 here because the RLNC implementation
-     * operates on prime fields.
+     * GF(256): one symbol per byte. The implementation operates on
+     * binary extension fields.
      */
     rlnc_config_t cfg = {
-        .q = 8,
+        .q = 256,
         .packet_size = 64,
         .generation_size = 5
     };
 
-    
+    /*
+     * Anamorphic parameters. The receiver collects S = K + 2 symbols.
+     * The label length is a = ceil(lambda / 8) and K >= 2a is required,
+     * so lambda is only 16 bits for this demo generation of K = 5 packets.
+     */
+    rlnc_aconfig_t acfg = {
+        .lambda = 8 * (cfg.generation_size / 2),
+        .received = cfg.generation_size + 2
+    };
 
     uint8_t *akey = rlnc_akeygen();
 
@@ -214,7 +222,7 @@ static int command_test(
             cfg.generation_size,
             source_count
         );
-        
+
         free_content(source_content, source_count);
         return 1;
     }
@@ -224,11 +232,11 @@ static int command_test(
      * We need at least K generated packets so that we can
      * select K packets for decoding.
      */
-    if (generated_packets < cfg.generation_size) {
+    if (generated_packets < acfg.received) {
         fprintf(
             stderr,
             "Error: x must be at least %zu.\n",
-            cfg.generation_size
+            acfg.received
         );
 
         free_content(source_content, source_count);
@@ -358,18 +366,13 @@ static int command_test(
 
         RandomnessSource rand = linux_randomness();
 
-        
+        /*
+         * The anamorphic encoder produces all symbols of the generation
+         * at once (below), regular symbols are produced one by one.
+         */
         int encoding_result = 0;
-        
-        if(ana_msg != -1){
-            encoding_result = rlnc_source_aencode(
-                &cfg,
-                source,
-                cfg.generation_size,
-                &generated[i],
-                &rand, akey, ana_msg);
-        }
-        else{
+
+        if (ana_msg == NULL) {
             encoding_result = rlnc_encode(
                 &cfg,
                 source,
@@ -377,7 +380,7 @@ static int command_test(
                 &generated[i],
                 &rand);
         }
-        
+
 
         /*
          * Encode the entire generation.
@@ -409,6 +412,35 @@ static int command_test(
         }
     }
 
+
+    size_t amsg_len = rlnc_amsg_len(&cfg, &acfg);
+    uint8_t *amsg_in = calloc(amsg_len ? amsg_len : 1, 1);
+    uint8_t *amsg_out = calloc(amsg_len ? amsg_len : 1, 1);
+
+    if (amsg_in == NULL || amsg_out == NULL || amsg_len == 0) {
+        fprintf(stderr, "Invalid anamorphic parameters.\n");
+        return 1;
+    }
+
+    if (ana_msg != NULL) {
+        RandomnessSource rand = linux_randomness();
+
+        if (strlen(ana_msg) > amsg_len) {
+            fprintf(
+                stderr,
+                "Error: anamorphic message too long (maximum %zu bytes).\n",
+                amsg_len);
+            return 1;
+        }
+
+        memcpy(amsg_in, ana_msg, strlen(ana_msg));
+
+        if (rlnc_aencode(&cfg, &acfg, source, generated,
+                         generated_packets, &rand, akey, amsg_in) != 0) {
+            fprintf(stderr, "Anamorphic encoding failed.\n");
+            return 1;
+        }
+    }
 
     printf(
         "Generated %zu coded packets.\n",
@@ -454,9 +486,10 @@ static int command_test(
      * --------------------------------------------------------
      */
     size_t K = cfg.generation_size;
+    size_t S = acfg.received;
 
     rlnc_packet_t *received =
-        calloc(K, sizeof(rlnc_packet_t));
+        calloc(S, sizeof(rlnc_packet_t));
 
     rlnc_packet_t *decoded =
         calloc(K, sizeof(rlnc_packet_t));
@@ -477,7 +510,7 @@ static int command_test(
      * packets. They can directly point to the generated
      * packets.
      */
-    for (size_t i = 0; i < K; ++i) {
+    for (size_t i = 0; i < S; ++i) {
 
         size_t selected =
             indices[i];
@@ -491,7 +524,7 @@ static int command_test(
         /*
          * Allocate output packets for decoding.
          */
-        if (rlnc_packet_alloc(
+        if (i < K && rlnc_packet_alloc(
                 &cfg,
                 &decoded[i]) != 0) {
 
@@ -531,9 +564,11 @@ static int command_test(
     int aresult =
         rlnc_adecode(
             &cfg,
+            &acfg,
             received,
-            K,
-            akey
+            S,
+            akey,
+            amsg_out
         );
 
 
@@ -542,13 +577,16 @@ static int command_test(
      * Print result.
      * --------------------------------------------------------
      */
-    if(aresult != -1){
-        printf("\nAnam. decode result: %d\n", aresult);
+    if(aresult == 0){
+        printf("\nAnam. decode result: ");
+        for (size_t i = 0; i < amsg_len && amsg_out[i] != 0; ++i)
+            putchar((char)amsg_out[i]);
+        putchar('\n');
     }
     else{
          printf("\nNo anamorphic message present\n");
     }
-    
+
     printf("\nDecode result: ");
 
     switch (result) {
@@ -598,6 +636,9 @@ static int command_test(
     free(received);
     free(decoded);
     free(indices);
+    free(amsg_in);
+    free(amsg_out);
+    rlnc_akey_free(akey);
 
     for (size_t i = 0;
          i < generated_packets;
@@ -645,7 +686,7 @@ int main(int argc, char **argv)
 
         fprintf(
             stderr,
-            "Usage: %s reg #received \"packet1;packet2;...\"\nOR ana #received \"packet1;packet2;...\" 0/1\n",
+            "Usage: %s reg #generated \"packet1;packet2;...\"\nOR ana #generated \"packet1;packet2;...\" \"anamorphic message\"\n",
             argv[0]
         );
 
@@ -653,17 +694,21 @@ int main(int argc, char **argv)
     }
 
 
-    int ana_msg = -1;
+    const char *ana_msg = NULL;
 
 
     if (strcmp(argv[1], "reg") == 0) {
 
-        ana_msg = -1;
+        ana_msg = NULL;
     }
     else if (strcmp(argv[1], "ana") == 0) {
 
-        ana_msg =  strtoul(argv[4], NULL, 10);
-        printf("%d\n", ana_msg);
+        if (argc != 5) {
+            fprintf(stderr, "ana needs an anamorphic message\n");
+            return 1;
+        }
+
+        ana_msg = argv[4];
     }
     else{
         fprintf(
@@ -705,5 +750,5 @@ int main(int argc, char **argv)
         argv[3],
         (size_t)x, ana_msg
     );
-    
+
 }

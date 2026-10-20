@@ -116,43 +116,59 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
     }
 
     size_t r_prime = params->g/2;
-    
-    /*
-     * Sample P'.
-     */
-    SparseP P_prime =
-        sparse_p_alloc(r_prime,
-                       params->n,
-                       params->t);
-
-    sample_sparse_p(random, &P_prime);
-
-    printf("ak1\n");
-
-    //compute P'G
-
-    PackedG PpG = sparse_p_mul_packed_g(&P_prime, &reg_keys->enc->G);
-
-    
 
     /*
-     * Compute ker(P'G).
+     * Sample P' until P'G has full row rank r'. Since
+     * dim ker(P'G) = g - rk(P'G), this is the case iff the kernel has
+     * dimension g - r'. For r' < g this fails with probability <= 2^-(g-r'),
+     * so a bounded number of attempts suffices.
      */
-    PackedMatrix temp = packed_g_to_matrix(&PpG);
+    enum { MAX_ATTEMPTS = 128 };
 
-    KernelBasis kerPpG =
-        kernel_basis(&temp);
+    SparseP P_prime = {0};
+    KernelBasis kerPpG = {0};
+    int full_rank = 0;
 
-    
-    printf("ker P'G dim %zu\n", kerPpG.dimension);
+    for (int attempt = 0; attempt < MAX_ATTEMPTS && !full_rank; ++attempt) {
+        P_prime =
+            sparse_p_alloc(r_prime,
+                           params->n,
+                           params->t);
 
+        sample_sparse_p(random, &P_prime);
+
+        //compute P'G
+        PackedG PpG = sparse_p_mul_packed_g(&P_prime, &reg_keys->enc->G);
+
+        /*
+         * Compute ker(P'G).
+         */
+        PackedMatrix temp = packed_g_to_matrix(&PpG);
+
+        kerPpG = kernel_basis(&temp);
+
+        packed_matrix_free(&temp);
+        packed_g_free(&PpG);
+
+        full_rank = (kerPpG.dimension + r_prime == params->g);
+
+        if (!full_rank) {
+            kernel_basis_free(&kerPpG);
+            sparse_p_free(&P_prime);
+        }
+    }
+
+    if (!full_rank) {
+        free_enc_akey(params_ptr, aparams_ptr, dk->enc);
+        free_dec_akey(params_ptr, aparams_ptr, dk->dec);
+        free(dk);
+
+        return NULL;
+    }
 
     PackedG B = kernel_basis_to_packed_g(&kerPpG, params->g);
 
-    
-    
-    
-
+    kernel_basis_free(&kerPpG);
 
     dk->enc->Subspace = malloc(sizeof(PackedG));
     if (dk->enc->Subspace == NULL) {
