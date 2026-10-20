@@ -1,6 +1,7 @@
 #include "prcs/zerobit/implementations/prc_ldpc.h"
 #include "prcs/anamorphism/zerobit/aprc_ldpc.h"
 #include "utils/random.h"
+#include "main_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,72 +27,6 @@
 static const A_LDPCParams aparams = {
     .g_prime = 174//1024-256/2 = 1024-128=896
 };
-
-
-
-/*
- * ================================================================
- * Helpers
- * ================================================================
- */
-
-static void
-print_codeword(const uint8_t *codeword,
-               size_t bits)
-{
-    for (size_t i = 0;
-         i < bits;
-         ++i) {
-
-        putchar(
-            (codeword[i >> 3] &
-             (uint8_t)(1u << (i & 7)))
-            ? '1'
-            : '0'
-        );
-    }
-
-    putchar('\n');
-}
-
-
-static uint8_t *
-parse_codeword(const char *string,
-               size_t expected_bits)
-{
-    if (strlen(string) != expected_bits)
-        return NULL;
-
-    size_t bytes =
-        (expected_bits + 7) / 8;
-
-    uint8_t *codeword =
-        calloc(bytes, 1);
-
-    if (codeword == NULL)
-        return NULL;
-
-    for (size_t i = 0;
-         i < expected_bits;
-         ++i) {
-
-        if (string[i] == '1') {
-
-            codeword[i >> 3] |=
-                (uint8_t)(
-                    1u << (i & 7)
-                );
-
-        } else if (string[i] != '0') {
-
-            free(codeword);
-
-            return NULL;
-        }
-    }
-
-    return codeword;
-}
 
 
 static void
@@ -143,7 +78,6 @@ main(void)
 
         return EXIT_FAILURE;
     }
-
 
 
     aZBPRC aprc = aprc_ldpc(&aparams);

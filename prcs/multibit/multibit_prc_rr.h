@@ -9,7 +9,6 @@
 #include "multibit_prc.h"
 
 
-
 typedef struct {
 
     MBPRC base;
@@ -35,11 +34,9 @@ typedef struct {
         size_t *message_bits_out,
         uint8_t *seed_out
     );
-    
+
 
 } MBPRC_RR;
-
-
 
 
 #endif /* MULTI_BIT_PRC_RR_H */

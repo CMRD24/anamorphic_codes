@@ -3,13 +3,12 @@
 #include "prcs/multibit/implementations/prc_sharp.h"
 #include "utils/hamming74.h"
 #include "utils/random.h"
+#include "main_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-
-
 
 
 #define MESSAGE_SIZE 4
@@ -20,181 +19,6 @@
  * Helpers
  * ================================================================
  */
-
-/*
- * Save a packed codeword as a textual bit string.
- */
-static int
-save_codeword(const char *filename,
-              const uint8_t *codeword,
-              size_t bits)
-{
-    FILE *file =
-        fopen(filename, "w");
-
-    if (file == NULL) {
-        perror("fopen");
-        return 0;
-    }
-
-    for (size_t i = 0;
-         i < bits;
-         ++i) {
-
-        if (fputc(
-                (codeword[i >> 3] &
-                 (uint8_t)(1u << (i & 7)))
-                ? '1'
-                : '0',
-                file) == EOF) {
-
-            fclose(file);
-            return 0;
-        }
-    }
-
-    if (fputc('\n', file) == EOF) {
-        fclose(file);
-        return 0;
-    }
-
-    fclose(file);
-
-    return 1;
-}
-
-
-/*
- * Read a textual codeword from a file.
- *
- * Whitespace is ignored. Every other character must be
- * either '0' or '1'.
- *
- * The buffer is grown dynamically, so there is no fixed
- * maximum ciphertext length.
- */
-static uint8_t *
-load_codeword(const char *filename,
-              size_t *bits)
-{
-    if (bits == NULL)
-        return NULL;
-
-    *bits = 0;
-
-    FILE *file =
-        fopen(filename, "r");
-
-    if (file == NULL) {
-        perror("fopen");
-        return NULL;
-    }
-
-    /*
-     * Start with a small buffer and grow it as necessary.
-     */
-    size_t capacity = 1024;
-
-    uint8_t *codeword =
-        calloc((capacity + 7) / 8, 1);
-
-    if (codeword == NULL) {
-        fclose(file);
-        return NULL;
-    }
-
-    int ch;
-
-    while ((ch = fgetc(file)) != EOF) {
-
-        /*
-         * Ignore whitespace.
-         */
-        if (ch == ' ' ||
-            ch == '\t' ||
-            ch == '\n' ||
-            ch == '\r')
-            continue;
-
-        /*
-         * Only binary digits are allowed.
-         */
-        if (ch != '0' &&
-            ch != '1') {
-
-            fprintf(stderr,
-                    "Invalid character in sharp.txt: '%c'\n",
-                    ch);
-
-            free(codeword);
-            fclose(file);
-
-            return NULL;
-        }
-
-        /*
-         * Grow the bit buffer if necessary.
-         */
-        if (*bits == capacity) {
-
-            size_t new_capacity;
-
-            if (capacity > SIZE_MAX / 2) {
-                free(codeword);
-                fclose(file);
-                return NULL;
-            }
-
-            new_capacity =
-                capacity * 2;
-
-            uint8_t *new_codeword =
-                realloc(
-                    codeword,
-                    (new_capacity + 7) / 8
-                    * sizeof(uint8_t)
-                );
-
-            if (new_codeword == NULL) {
-                free(codeword);
-                fclose(file);
-                return NULL;
-            }
-
-            /*
-             * Clear the newly allocated part.
-             */
-            size_t old_bytes =
-                (capacity + 7) / 8;
-
-            size_t new_bytes =
-                (new_capacity + 7) / 8;
-
-            memset(
-                new_codeword + old_bytes,
-                0,
-                new_bytes - old_bytes
-            );
-
-            codeword = new_codeword;
-            capacity = new_capacity;
-        }
-
-        if (ch == '1') {
-
-            codeword[*bits >> 3] |=
-                (uint8_t)(
-                    1u << (*bits & 7)
-                );
-        }
-
-        ++(*bits);
-    }
-
-    fclose(file);
-
-    return codeword;
-}
 
 
 /*
@@ -249,7 +73,6 @@ main(void)
         RandomnessSource random = linux_randomness();
 
 
-
         PRCLow_Params low_params = {
             .underlying = &underlying,
             .ell = 64
@@ -257,12 +80,12 @@ main(void)
 
         MBPRC prc_l = prc_low(&low_params);
 
-        
+
         PRCSharp_Params high_params = {
             .prc = &prc_l,
             .lambda_bits = 16
         };
-        
+
         MBPRC prc = prc_sharp(&high_params);
 
 /*
@@ -283,31 +106,6 @@ if (!keys) {
 }
 
 printf("PRC_high initialized.\n");
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     print_usage();
@@ -427,7 +225,7 @@ if (strncmp(line, "encode", 6) == 0 &&
 
     printf("m2\n");
 
-    
+
     size_t message_bits = MESSAGE_SIZE * 8;
     size_t output_bits = 0;
 
@@ -513,7 +311,7 @@ if (strcmp(line, "decode") == 0) {
         ciphertext_bits
     );
 
-    
+
     uint8_t message[MESSAGE_SIZE] = {0};
 
     size_t message_bits = 0;

@@ -1,99 +1,45 @@
-
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sodium.h>
-#include <string.h>
+
 #include "aprc_rr.h"
+#include "rr_core.h"
 
-#define PRF_KEYBYTES 32
-
-
-
-
-static uint8_t prf_bit(const unsigned char *key,
-                const unsigned char *input,
-                size_t input_len)
+static RRShape shape_of(const aZBPRC_RR_Params *aparams)
 {
-    unsigned char output[crypto_generichash_BYTES];
-
-    crypto_generichash(
-        output,
-        sizeof(output),
-        input,
-        input_len,
-        key,
-        crypto_generichash_KEYBYTES
-    );
-
-    return output[0] & 1;
+    return (RRShape){
+        .seed_len = aparams->seed_len,
+        .indication_len = aparams->indication_len,
+        .mu = aparams->mu,
+    };
 }
 
-
 static APRC_RR_Keys *akeygen(
-        const aZBPRC_RR_Params *aparams,
-        RandomnessSource *random
-) {
+    const aZBPRC_RR_Params *aparams,
+    RandomnessSource *random)
+{
     (void)aparams;
     (void)random;
 
-    APRC_RR_Keys *keys = malloc(sizeof(*keys));
-    if (keys == NULL) {
-        return NULL;
-    }
-
-    uint8_t *prf_key = malloc(crypto_generichash_KEYBYTES);
-    uint8_t *encryption_key = malloc(crypto_generichash_KEYBYTES);
-
-    if (prf_key == NULL || encryption_key == NULL) {
-        free(prf_key);
-        free(encryption_key);
-        free(keys);
-        return NULL;
-    }
-
-    crypto_generichash_keygen(prf_key);
-    crypto_generichash_keygen(encryption_key);
-
-    keys->prf_key = prf_key;
-    keys->encryption_key = encryption_key;
-
-    return keys;
+    return rr_akeygen();
 }
 
 static void akeygen_free(const aZBPRC_RR_Params *aparams, APRC_RR_Keys *keys)
 {
     (void)aparams;
 
-    if (keys == NULL) {
-        return;
-    }
-
-    sodium_memzero((void *)keys->prf_key, crypto_generichash_KEYBYTES);
-    sodium_memzero((void *)keys->encryption_key, crypto_generichash_KEYBYTES);
-
-    free((void *)keys->prf_key);
-    free((void *)keys->encryption_key);
-    free(keys);
+    rr_akey_free(keys);
 }
-
-
 
 /*
  * Anamorphic encoding.
  *
- * reg_messages:
- *     mu regular zero-bit messages, represented as single bits.
+ * ana_message: rr_message_bytes() bytes.
+ * output_bits: number of bits per returned codeword.
  *
- * ana_message:
- *     anamorphic message, arbitrary bytes/bits depending on the SKE
- *     representation.
- *
- * output_bits:
- *     number of bits per returned codeword.
- *
- * Returns an array of mu codewords. Each codeword is represented as a
- * byte array; its individual length is determined by prc_rr->base.
+ * Returns an array of mu codewords, each encoding the bit 1 with one of the
+ * seeds from rr_build_seeds(); NULL on error.
  */
 static uint8_t **aencode(
     const aZBPRC_RR_Params *aparams,
@@ -101,387 +47,100 @@ static uint8_t **aencode(
     const APRC_RR_Keys *dkey,
     const uint8_t *ana_message,
     RandomnessSource *random,
-    size_t *output_bits
-)
+    size_t *output_bits)
 {
-
-    if (aparams == NULL ||
-        dkey == NULL ||
-        dkey->prf_key == NULL ||
-        dkey->encryption_key == NULL ||
-        random == NULL ||
-        random->rng == NULL ||
-        ana_message == NULL ||
-        output_bits == NULL ||
-        aparams->prc_rr == NULL ||
-        aparams->prc_rr->encode_ws == NULL) {
-        return NULL;
-    }
-
-
-    const size_t k  = aparams->seed_len;
-    const size_t mu = aparams->mu;
-    const size_t z  = aparams->indication_len;
-
-    if (k == 0 || mu == 0 || z > mu)
+    if (aparams == NULL || output_bits == NULL ||
+        aparams->prc_rr == NULL || aparams->prc_rr->encode_ws == NULL)
         return NULL;
 
-    /*
-     * The construction requires the SKE ciphertext to contain
-     * exactly (mu-z)*k bits.
-     */
-    const size_t encrypted_bits = k * (mu - z);
+    const RRShape shape = shape_of(aparams);
+    const size_t seed_bytes = rr_seed_bytes(&shape);
 
+    uint8_t *seeds = rr_build_seeds(&shape, dkey, ana_message, random);
 
-    const size_t ana_message_bits = encrypted_bits-k;
-
-
-    /*
-     * Convert the anamorphic message into the SKE ciphertext.
-     *
-     * The SKE interface has to provide ciphertext bits. Here `encrypt`
-     * is assumed to produce exactly encrypted_bits bits.
-     */
-    uint8_t *encrypted = NULL;
-
-    if (encrypted_bits > 0) {
-        const size_t encrypted_bytes = (encrypted_bits + 7) / 8;
-
-
-        encrypted = malloc(encrypted_bytes);
-        if (encrypted == NULL)
-            return NULL;
-
-        /*
-         * Replace this call with your actual SKE encryption function.
-         *
-         * IMPORTANT:
-         * encrypted must contain exactly (mu-z)*k bits.
-         */
-
-        
-
-        if (!encrypt(
-                dkey->encryption_key,
-                k/8, //use the same lambda as the seed
-                ana_message,
-                ana_message_bits/8,
-                encrypted)) {
-            free(encrypted);
-            return NULL;
-        }
-    }
-
-
-    /*
-     * r_i are k-bit seeds.
-     *
-     * We store all seeds consecutively:
-     *
-     *     seeds = r_1 || ... || r_z || r_{z+1} || ... || r_mu
-     *
-     * The first z seeds are sampled such that PRF(s,r_i)=0.
-     */
-    const size_t seed_bytes = (k + 7) / 8;
-    uint8_t *seeds = calloc(mu, seed_bytes);
-
-    if (seeds == NULL) {
-        free(encrypted);
+    if (seeds == NULL)
         return NULL;
-    }
 
-
-    /*
-     * Generate the indication seeds.
-     */
-    for (size_t i = 0; i < z; i++) {
-
-        uint8_t *seed = seeds + i * seed_bytes;
-
-        do {
-            if (!random->rng(
-                    random,
-                    seed,
-                    seed_bytes)) {
-                free(seeds);
-                free(encrypted);
-                return NULL;
-            }
-
-            /*
-             * If k is not a multiple of 8, clear the unused
-             * high bits so the seed really represents k bits.
-             */
-            if (k % 8 != 0) {
-                seed[seed_bytes - 1] &= (uint8_t)((1u << (k % 8)) - 1u);
-            }
-
-        } while (prf_bit(
-            dkey->prf_key,
-            seed,
-            seed_bytes
-        ) != 0);
-    }
-
-
-    /*
-     * r_{z+1} || ... || r_mu = SKEEnc(ek,m_a)
-     *
-     * Copy the SKE ciphertext bit string into the remaining seeds.
-     */
-    if (mu > z) {
-        memcpy(
-            seeds + z * seed_bytes,
-            encrypted,
-            (encrypted_bits + 7) / 8
-        );
-    }
-
-    /*
-     * Encode every regular message using its corresponding seed.
-     */
-    uint8_t **codewords = calloc(mu, sizeof(*codewords));
-
-    if (codewords == NULL) {
-        sodium_memzero(seeds, mu * seed_bytes);
-        free(seeds);
-        free(encrypted);
-        return NULL;
-    }
-
+    uint8_t **codewords = calloc(aparams->mu, sizeof(*codewords));
     size_t codeword_bits = 0;
+    int ok = codewords != NULL;
 
-    for (size_t i = 0; i < mu; i++) {
-
+    for (size_t i = 0; ok && i < aparams->mu; i++) {
         size_t current_bits = 0;
 
-
-        /*
-         * encode_ws() consumes the seed directly.
-         */
         codewords[i] = aparams->prc_rr->encode_ws(
             aparams->prc_rr->base.params,
             reg_key,
             random,
             &current_bits,
-            seeds + i * seed_bytes
-        );
+            seeds + i * seed_bytes);
 
-        if (codewords[i] == NULL) {
-            /*
-             * Free already-created codewords.
-             *
-             * The exact allocation size depends on your PRC.
-             * Ideally the PRC should expose a codeword_free()
-             * function.
-             */
-            for (size_t j = 0; j < i; j++)
-                free(codewords[j]);
+        /* all codewords must have the same length */
+        if (codewords[i] == NULL || (i > 0 && current_bits != codeword_bits))
+            ok = 0;
 
-            free(codewords);
-
-            sodium_memzero(seeds, mu * seed_bytes);
-            free(seeds);
-            free(encrypted);
-
-            return NULL;
-        }
-
-        if (i == 0) {
-            codeword_bits = current_bits;
-        } else if (current_bits != codeword_bits) {
-            /*
-             * The construction assumes equal-size PRC codewords.
-             */
-            for (size_t j = 0; j <= i; j++)
-                free(codewords[j]);
-
-            free(codewords);
-
-            sodium_memzero(seeds, mu * seed_bytes);
-            free(seeds);
-            free(encrypted);
-
-            return NULL;
-        }
+        codeword_bits = current_bits;
     }
 
-
-    *output_bits = codeword_bits;
-
-    sodium_memzero(seeds, mu * seed_bytes);
+    sodium_memzero(seeds, aparams->mu * seed_bytes);
     free(seeds);
 
-    if (encrypted != NULL) {
-        sodium_memzero(
-            encrypted,
-            (encrypted_bits + 7) / 8
-        );
-        free(encrypted);
+    if (!ok) {
+        rr_free_codewords(codewords, aparams->mu);
+        return NULL;
     }
 
+    *output_bits = codeword_bits;
 
     return codewords;
 }
 
-
-
+/* Returns 1 and the anamorphic message on success, 0 otherwise. */
 static int adecode(
     const aZBPRC_RR_Params *aparams,
     const ZBPRC_DecKey *reg_key,
     const APRC_RR_Keys *dkey,
     const uint8_t *const *codewords,
     size_t ciphertext_bits,
-    uint8_t *ana_message
-)
+    uint8_t *ana_message)
 {
-
-    if (aparams == NULL ||
-        dkey == NULL ||
-        dkey->prf_key == NULL ||
-        dkey->encryption_key == NULL ||
-        codewords == NULL ||
-        aparams->prc_rr == NULL ||
-        aparams->prc_rr->decode_ws == NULL) {
-        return 0;
-    }
-
-
-    const size_t k  = aparams->seed_len;
-    const size_t mu = aparams->mu;
-    const size_t z  = aparams->indication_len;
-
-    if (k == 0 || mu == 0 || z > mu)
+    if (aparams == NULL || codewords == NULL ||
+        aparams->prc_rr == NULL || aparams->prc_rr->decode_ws == NULL)
         return 0;
 
+    const RRShape shape = shape_of(aparams);
+    const size_t seed_bytes = rr_seed_bytes(&shape);
 
-    const size_t encrypted_bits = k * (mu - z);
+    if (rr_message_bytes(&shape) == 0)
+        return 0;
 
-    const size_t ana_message_bits = encrypted_bits-k;
-    /*
-     * Each recovered seed is k bits.
-     */
-    const size_t seed_bytes = (k + 7) / 8;
-
-    uint8_t *seeds = calloc(mu, seed_bytes);
+    uint8_t *seeds = calloc(aparams->mu, seed_bytes);
 
     if (seeds == NULL)
         return 0;
 
+    int ok = 1;
 
-    /*
-     * Recover r_i from every regular PRC codeword.
-     */
-    for (size_t i = 0; i < mu; i++) {
-
-
-        if (!aparams->prc_rr->decode_ws(
-                aparams->prc_rr->base.params,
-                reg_key,
-                codewords[i],
-                ciphertext_bits,
-                seeds + i * seed_bytes
-            )) {
-
-
-            sodium_memzero(seeds, mu * seed_bytes);
-            free(seeds);
-            return 0;
-        }
-
-
+    /* recover r_i from every regular codeword */
+    for (size_t i = 0; ok && i < aparams->mu; i++) {
+        ok = aparams->prc_rr->decode_ws(
+            aparams->prc_rr->base.params,
+            reg_key,
+            codewords[i],
+            ciphertext_bits,
+            seeds + i * seed_bytes);
     }
 
+    ok = ok && rr_open_seeds(&shape, dkey, seeds, ana_message) == 0;
 
-
-    /*
-     * Check the indication seeds:
-     *
-     *     PRF(s,r_i) == 0
-     *
-     * for every i <= z.
-     */
-    for (size_t i = 0; i < z; i++) {
-
-        uint8_t bit = prf_bit(
-            dkey->prf_key,
-            seeds + i * seed_bytes,
-            seed_bytes
-        );
-
-
-        if (bit != 0) {
-            sodium_memzero(seeds, mu * seed_bytes);
-            free(seeds);
-            return 0;
-        }
-    }
-
-
-    /*
-     * Extract
-     *
-     *     r_{z+1} || ... || r_mu
-     *
-     * which is exactly the SKE ciphertext.
-     */
-    const size_t encrypted_bytes = (encrypted_bits + 7) / 8;
-
-    uint8_t *encrypted = NULL;
-
-    if (encrypted_bytes > 0) {
-
-        encrypted = malloc(encrypted_bytes);
-
-        if (encrypted == NULL) {
-            sodium_memzero(seeds, mu * seed_bytes);
-            free(seeds);
-            return 0;
-        }
-
-        memcpy(
-            encrypted,
-            seeds + z * seed_bytes,
-            encrypted_bytes
-        );
-
-        /*
-         * If the number of bits isn't byte aligned, clear
-         * the unused bits.
-         */
-        if (encrypted_bits % 8 != 0) {
-            encrypted[encrypted_bytes - 1] &=
-                (uint8_t)((1u << (encrypted_bits % 8)) - 1u);
-        }
-    }
-
-
-    /*
-     * SKE.Dec(ek, r_{z+1} || ... || r_mu)
-     */
-    int result = decrypt(
-        dkey->encryption_key,
-        k/8,
-        encrypted,
-        ana_message,
-        ana_message_bits/8
-    );
-
-    if (encrypted != NULL) {
-        sodium_memzero(encrypted, encrypted_bytes);
-        free(encrypted);
-    }
-
-    sodium_memzero(seeds, mu * seed_bytes);
+    sodium_memzero(seeds, aparams->mu * seed_bytes);
     free(seeds);
 
-
-    return result;
+    return ok;
 }
 
-
-
-aZBPRC_RR aZBPRC_RR_init(const aZBPRC_RR_Params *aparams){
+aZBPRC_RR aZBPRC_RR_init(const aZBPRC_RR_Params *aparams)
+{
     aZBPRC_RR result = {
         .adecode = adecode,
         .aencode = aencode,

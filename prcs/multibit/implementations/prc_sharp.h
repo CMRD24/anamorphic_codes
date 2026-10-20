@@ -25,7 +25,6 @@ typedef struct {
     size_t lambda_bits;
 
 
-
     double delta;
 
 

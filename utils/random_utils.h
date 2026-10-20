@@ -30,7 +30,7 @@
 
  size_t random_bounded(RandomnessSource *random,
                              size_t bound);
-    
+
 void
 random_permutation(
     RandomnessSource *random,

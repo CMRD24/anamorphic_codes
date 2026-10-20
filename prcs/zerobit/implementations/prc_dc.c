@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "../../../utils/random_utils.h"
+#include "../../../utils/helpers.h"
 
 
 /*
@@ -37,18 +38,6 @@ size_t
 prc_dc_bytes_for_bits(size_t n)
 {
     return (n + 7u) / 8u;
-}
-
-
-static inline uint8_t
-get_bit(
-    const uint8_t *data,
-    size_t index)
-{
-    return (uint8_t)(
-        (data[index >> 3u] >>
-         (index & 7u)) & 1u
-    );
 }
 
 
@@ -390,7 +379,7 @@ prc_dc_encode(
 
     const ZBPRC_EncKey *key =
         base_key;
-    
+
 
     if (!prc_dc_valid_params(params) ||
         key == NULL ||

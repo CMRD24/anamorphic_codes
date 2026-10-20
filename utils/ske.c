@@ -1,148 +1,88 @@
-
-
-#include <stddef.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <sodium.h>
-#include <string.h>
 #include "ske.h"
 
-#define PRF_KEYBYTES 32
-
-
-
-
-
+#include <stdlib.h>
+#include <sodium.h>
 
 /*
- * Ciphertext layout:
- *
- *   ciphertext = seed || (PRF(key, seed) XOR message)
- *
- * Ciphertext length = seed_len + max_message_length
- *
- * The unused part after message_len is zero-padded.
- * 
- * 1 on success, 0 on failure
+ * out[i] = in[i] XOR PRF(key, nonce)[i]. in and out may be the same buffer.
  */
+static int xor_prf_pad(
+    const uint8_t *key,
+    const uint8_t *nonce,
+    size_t nonce_len,
+    const uint8_t *in,
+    uint8_t *out,
+    size_t len)
+{
+    uint8_t *pad;
+
+    if (key == NULL || nonce == NULL || out == NULL)
+        return -1;
+
+    if (len == 0)
+        return 0;
+
+    if (in == NULL)
+        return -1;
+
+    pad = malloc(len);
+    if (pad == NULL)
+        return -1;
+
+    if (crypto_generichash(pad, len, nonce, nonce_len,
+                           key, crypto_generichash_KEYBYTES) != 0) {
+        free(pad);
+        return -1;
+    }
+
+    for (size_t i = 0; i < len; i++)
+        out[i] = in[i] ^ pad[i];
+
+    sodium_memzero(pad, len);
+    free(pad);
+
+    return 0;
+}
+
 int encrypt(
     const uint8_t *key,
-    size_t seed_len_bytes,
+    size_t nonce_len,
     const uint8_t *message,
     size_t message_len,
     uint8_t *ciphertext)
 {
-    if (key == NULL || ciphertext == NULL)
-        return 0;
+    if (ciphertext == NULL)
+        return -1;
 
-    if (message_len > 0 && message == NULL)
-        return 0;
+    randombytes_buf(ciphertext, nonce_len);
 
-    /*
-     * 1. Sample a uniformly random seed.
-     *
-     * ciphertext[0 .. seed_len-1] = seed
-     */
-    randombytes_buf(ciphertext, seed_len_bytes);
-
-    /*
-     * 2. Generate PRF output:
-     *
-     *    pad = F_k(seed)
-     *
-     * with exactly max_message_length bytes.
-     */
-    uint8_t *pad = malloc(message_len);
-
-    if (message_len > 0 && pad == NULL)
-        return 0;
-
-    if (crypto_generichash(
-            pad,
-            message_len,
-            ciphertext,       // seed
-            seed_len_bytes,
-            key,
-            PRF_KEYBYTES) != 0) {
-        free(pad);
-        return 0;
-    }
-
-    /*
-     * 3. Compute:
-     *
-     *    ciphertext = seed || (pad XOR message)
-     */
-    for (size_t i = 0; i < message_len; i++) {
-        ciphertext[seed_len_bytes + i] =
-            pad[i] ^ message[i];
-    }
-
-
-    sodium_memzero(pad, message_len);
-    free(pad);
-
-    return 1;
+    return xor_prf_pad(key, ciphertext, nonce_len,
+                       message, ciphertext + nonce_len, message_len);
 }
 
-
-/*
- * Decrypt:
- *
- * ciphertext = seed || (PRF(key, seed) XOR message)
- *
- * message_len must be supplied separately because the ciphertext
- * does not encode the actual message length.
- */
 int decrypt(
     const uint8_t *key,
-    size_t seed_len_bytes,
+    size_t nonce_len,
     const uint8_t *ciphertext,
     uint8_t *message,
     size_t message_len)
 {
-    if (key == NULL || ciphertext == NULL)
-        return 0;
+    if (ciphertext == NULL)
+        return -1;
 
-    if (message_len > 0 && message == NULL)
-        return 0;
+    return xor_prf_pad(key, ciphertext, nonce_len,
+                       ciphertext + nonce_len, message, message_len);
+}
 
-    /*
-     * 1. Generate the same PRF output:
-     *
-     *    pad = F_k(seed)
-     *
-     * The seed is stored in the first seed_len bytes
-     * of the ciphertext.
-     */
-    uint8_t *pad = malloc(message_len);
+uint8_t ske_prf_bit(
+    const uint8_t *key,
+    const uint8_t *input,
+    size_t input_len)
+{
+    uint8_t output[crypto_generichash_BYTES];
 
-    if (message_len > 0 && pad == NULL)
-        return 0;
+    crypto_generichash(output, sizeof(output), input, input_len,
+                       key, crypto_generichash_KEYBYTES);
 
-    if (crypto_generichash(
-            pad,
-            message_len,
-            ciphertext,       // seed
-            seed_len_bytes,
-            key,
-            PRF_KEYBYTES) != 0) {
-        free(pad);
-        return 0;
-    }
-
-    /*
-     * 2. Recover:
-     *
-     *    message = ciphertext_part XOR pad
-     */
-    for (size_t i = 0; i < message_len; i++) {
-        message[i] =
-            ciphertext[seed_len_bytes + i] ^ pad[i];
-    }
-
-    sodium_memzero(pad, message_len);
-    free(pad);
-
-    return 1;
+    return output[0] & 1;
 }

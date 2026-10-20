@@ -29,8 +29,6 @@ struct MBPRC_DecKey {
 };
 
 
-
-
 /*
  * ================================================================
  * Key generation
@@ -193,8 +191,6 @@ prc1_adapt_encode(
     if(message_bits!=1){
         return NULL;
     }
-
-
 
 
     prc = adapt_params->underlying_prc;

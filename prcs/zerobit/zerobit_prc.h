@@ -114,7 +114,6 @@ typedef struct {
         ZBPRC_DecKey *key
     );
 
-    
 
 } ZBPRC;
 
@@ -133,7 +132,6 @@ zbprc_blocksize(
         prc->params
     );
 }
-
 
 
 static inline ZBPRC_Keys *

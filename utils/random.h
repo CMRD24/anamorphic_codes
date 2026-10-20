@@ -21,7 +21,6 @@ typedef struct {
 } RandomnessSource;
 
 
-
 RandomnessSource linux_randomness(void);
 
 

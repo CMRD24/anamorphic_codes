@@ -1,4 +1,3 @@
-
 #ifndef SKE_H
 #define SKE_H
 
@@ -6,42 +5,50 @@
 #include <stdint.h>
 
 /*
- * Encrypt a message.
+ * Pseudorandom symmetric encryption (nonce-based stream cipher).
  *
  * Ciphertext layout:
- *   seed || (PRF(key, seed) XOR message)
+ *   nonce || (PRF(key, nonce) XOR message)
  *
  * The ciphertext buffer must have at least
- * seed_len_bytes + message_len bytes.
+ * nonce_len + message_len bytes. The key is a libsodium generichash key
+ * (crypto_generichash_KEYBYTES bytes).
  *
- * Returns 1 on success, 0 on failure.
+ * Returns 0 on success, -1 on error.
  */
 int encrypt(
     const uint8_t *key,
-    size_t seed_len_bytes,
+    size_t nonce_len,
     const uint8_t *message,
     size_t message_len,
     uint8_t *ciphertext
 );
 
 /*
- * Decrypt a message.
+ * Decrypt a ciphertext produced by encrypt().
  *
- * message_len must be supplied separately because
- * the ciphertext does not encode the actual message length.
+ * message_len must be supplied separately because the ciphertext
+ * does not encode the actual message length. The ciphertext buffer must
+ * contain at least nonce_len + message_len bytes.
  *
- * The ciphertext buffer must contain at least
- * seed_len_bytes + message_len bytes.
- * The message buffer must have at least message_len bytes.
- *
- * Returns 1 on success, 0 on failure.
+ * Returns 0 on success, -1 on error.
  */
 int decrypt(
     const uint8_t *key,
-    size_t seed_len_bytes,
+    size_t nonce_len,
     const uint8_t *ciphertext,
     uint8_t *message,
     size_t message_len
+);
+
+/*
+ * First bit of a keyed hash of input; used for the indication bits of the
+ * randomness-recovery based anamorphic PRCs.
+ */
+uint8_t ske_prf_bit(
+    const uint8_t *key,
+    const uint8_t *input,
+    size_t input_len
 );
 
 #endif /* SKE_H */

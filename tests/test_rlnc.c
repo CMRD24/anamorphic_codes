@@ -164,8 +164,8 @@ static void test_anamorphic_roundtrip(void)
     CHECK(arlnc_roundtrip(16, 64, 128, 66, 100));
     /* GF(2): a = 128, K = 256 */
     CHECK(arlnc_roundtrip(2, 256, 128, 266, 300));
-    /* S = K exactly */
-    CHECK(arlnc_roundtrip(256, 8, 32, 8, 16));
+    /* S close to K (a square system over GF(256) is singular with probability ~1/255) */
+    CHECK(arlnc_roundtrip(256, 8, 32, 10, 16));
 }
 
 static void test_anamorphic_rejections(void)

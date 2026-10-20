@@ -7,8 +7,6 @@
 
 typedef struct {
 
-    
-
 
     int (*generate)(
         const uint8_t *seed,
@@ -21,8 +19,6 @@ typedef struct {
 
 
 //convenience
-
-
 
 
 static inline int

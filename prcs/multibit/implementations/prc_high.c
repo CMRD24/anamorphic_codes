@@ -7,6 +7,7 @@
 
 #include "../../../utils/csprg_sodium.h"
 #include "../../../utils/random_utils.h"
+#include "../../../utils/helpers.h"
 
 
 /*
@@ -63,41 +64,6 @@ struct MBPRC_DecKey {
 
 
 /*
- * Set a single bit in a packed byte array.
- *
- * Bits are numbered from the least significant bit of byte 0.
- */
-static void
-set_bit(
-    uint8_t *buffer,
-    size_t bit,
-    uint8_t value)
-{
-    size_t byte_index = bit / 8;
-    size_t bit_index  = bit % 8;
-
-    if (value)
-        buffer[byte_index] |= (uint8_t)(1u << bit_index);
-    else
-        buffer[byte_index] &= (uint8_t)~(1u << bit_index);
-}
-
-
-static uint8_t
-get_bit(
-    const uint8_t *buffer,
-    size_t bit)
-{
-    size_t byte_index = bit / 8;
-    size_t bit_index  = bit % 8;
-
-    return (uint8_t)(
-        (buffer[byte_index] >> bit_index) & 1u
-    );
-}
-
-
-/*
  * XOR two byte arrays.
  */
 static void
@@ -110,8 +76,6 @@ xor_bytes(
     for (size_t i = 0; i < len; ++i)
         dst[i] = a[i] ^ b[i];
 }
-
-
 
 
 /*
@@ -209,8 +173,6 @@ fail:
 }
 
 
-
-
 /*
  * ================================================================
  * Encode
@@ -241,9 +203,8 @@ high_encode_ws(
             return NULL;
 
         }
-        
 
-    
+
     /*
      * The ECC interface operates on whole bytes.
      */
@@ -251,8 +212,7 @@ high_encode_ws(
         printf("Message bits must be devisible by 8\n");
         return NULL;
     }
-    
-        
+
 
     const size_t message_len =
         message_bits / 8;
@@ -277,7 +237,6 @@ high_encode_ws(
         return NULL;
 
 
-    
     /*
      * ------------------------------------------------------------
      * 2. Encode seed using low PRC
@@ -325,9 +284,6 @@ high_encode_ws(
     //save_codeword("test-enc.txt", encoded_seed, low_output_bits);
 
     free(low_codeword);
-
-
-    
 
 
     /*
@@ -378,7 +334,7 @@ high_encode_ws(
 
     //const CSPRG *csprg = csprg_sodium();
     RandomnessSource rand = csprg_randomness(seed, seed_len);
-    
+
 
     if (!rand.rng(rand.ctx, mask, ecc_len)) {
 
@@ -508,7 +464,6 @@ high_encode_ws(
 }
 
 
-
 static uint8_t *
 high_encode(const void *params_ptr,
     const MBPRC_EncKey *key_ptr,
@@ -532,9 +487,8 @@ high_encode(const void *params_ptr,
             return NULL;
 
         }
-        
 
-    
+
     /*
      * The ECC interface operates on whole bytes.
      */
@@ -542,8 +496,7 @@ high_encode(const void *params_ptr,
         printf("Message bits must be devisible by 8\n");
         return NULL;
     }
-    
-    
+
 
     /*
      * The seed consists of lambda bits.
@@ -564,7 +517,6 @@ high_encode(const void *params_ptr,
             seed_len))
         return NULL;
 
-    
 
     uint8_t *encoded = high_encode_ws(params_ptr, key_ptr, message, message_bits, random, output_bits, seed);
 
@@ -580,7 +532,6 @@ high_encode(const void *params_ptr,
  * Decode
  * ================================================================
  */
-
 
 
 static int
@@ -607,7 +558,6 @@ high_decode_ws(
         !message_bits_out)
         return 0;
 
-    
 
     size_t low_bits = params->low_prc->blocksize(params->low_prc->params);
     size_t ecc_bits = params->ecc->encoded_size(params->message_bits/8)*8;
@@ -636,7 +586,6 @@ high_decode_ws(
     if (!y){
         return 0;
     }
-        
 
 
         for (size_t i = 0; i < total_bits; ++i) {
@@ -668,7 +617,6 @@ high_decode_ws(
     uint8_t *y1 =
         calloc(1, ecc_bytes);
 
-    
 
     if (!encoded_seed || !y1) {
 
@@ -706,11 +654,9 @@ high_decode_ws(
     const size_t seed_len =
         params->lambda / 8;
 
-    
 
     size_t seed_bits = 0;
 
-    
 
     if (!mbprc_decode(
             params->low_prc,
@@ -814,7 +760,6 @@ high_decode_ws(
 }
 
 
-
  static int high_decode(const void *params_ptr,
     const MBPRC_DecKey *key_ptr,
     const uint8_t *ciphertext,
@@ -914,8 +859,6 @@ high_free_dec_key(
     free(key->permutation);
     free(key);
 }
-
-
 
 
 MBPRC

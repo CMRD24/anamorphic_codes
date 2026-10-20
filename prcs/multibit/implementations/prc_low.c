@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "../../../utils/random_utils.h"
+#include "../../../utils/helpers.h"
 
 
 /*
@@ -42,52 +43,6 @@ struct PRCLow_DecKey {
 
     size_t total_bits;
 };
-
-
-/*
- * ================================================================
- * Bit helpers
- * ================================================================
- *
- * Packed bit convention:
- *
- * bit 0 = MSB of byte 0
- */
-
-static int
-get_bit(
-    const uint8_t *data,
-    size_t bit)
-{
-    return (data[bit / 8] >> (7 - (bit % 8))) & 1;
-}
-
-
-static void
-set_bit(
-    uint8_t *data,
-    size_t bit,
-    int value)
-{
-    uint8_t mask =
-        (uint8_t)(1u << (7 - (bit % 8)));
-
-    if (value)
-        data[bit / 8] |= mask;
-    else
-        data[bit / 8] &= (uint8_t)~mask;
-}
-
-
-static size_t
-bits_to_bytes(
-    size_t bits)
-{
-    return (bits + 7) / 8;
-}
-
-
-
 
 
 static size_t *
@@ -170,7 +125,7 @@ size_t prc_low_blocklength(const void *void_params)
 {
     const PRCLow_Params *params =
         void_params;
-    
+
     return (params->ell + 1)* params->underlying->blocksize(params->underlying->params);
 }
 
@@ -189,7 +144,6 @@ prc_low_keygen(
     const PRCLow_Params *params =
         void_params;
 
-    
 
     if (!params ||
         !params->underlying ||
@@ -652,7 +606,6 @@ prc_low_decode(
             get_bit(ciphertext, output_pos)
         );
     }
-
 
 
     size_t block_bytes =

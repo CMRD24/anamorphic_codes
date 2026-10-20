@@ -280,11 +280,6 @@ int hamming_decode(
 }
 
 
-
-
-
-
-
 ECC
 hamming74_ecc(void)
 {

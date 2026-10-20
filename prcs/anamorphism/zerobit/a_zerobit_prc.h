@@ -9,7 +9,6 @@
 #include "../../zerobit/zerobit_prc.h"
 
 
-
 typedef struct APRC_EncKey APRC_EncKey;
 typedef struct APRC_DecKey APRC_DecKey;
 
@@ -35,10 +34,9 @@ typedef struct {
 typedef struct {
 
 
-
     const void *aparams;
 
-    
+
     APRC_Keys *(*akeygen)(
         const void *params,
         const void *aparams,
@@ -94,7 +92,6 @@ typedef struct {
         APRC_DecKey *key
     );
 
-    
 
 } aZBPRC;
 
@@ -104,9 +101,6 @@ typedef struct {
  * Convenience functions
  * ================================================================
  */
-
-
-
 
 
 static inline APRC_Keys *
@@ -182,9 +176,6 @@ zbprc_free_dec_akey(
 {
     aprc->free_adec_key(prc->params, aprc->aparams,key);
 }
-
-
-
 
 
 #endif /* AZERO_BIT_PRC_H */

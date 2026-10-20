@@ -8,7 +8,6 @@
 #include "../multibit_prc_rr.h"
 
 
-
 typedef struct {
 
     /*
@@ -18,7 +17,6 @@ typedef struct {
      */
     const MBPRC *prc;
 
-    
 
     /*
      * Security parameter lambda in bits.
@@ -26,7 +24,6 @@ typedef struct {
      * r has lambda bits and R2 has lambda bits.
      */
     size_t lambda_bits;
-
 
 
     double delta;

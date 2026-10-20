@@ -9,7 +9,6 @@
 #include "zerobit_prc.h"
 
 
-
 typedef struct {
 
     ZBPRC base;
@@ -31,11 +30,9 @@ typedef struct {
         size_t ciphertext_bits,
         uint8_t *seed_out
     );
-    
+
 
 } ZBPRC_RR;
-
-
 
 
 #endif /* ZERO_BIT_PRC_RR_H */

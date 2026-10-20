@@ -76,12 +76,11 @@ typedef struct {
     const void *params;
 
 
-
     size_t (*blocksize)(
         const void *params
     );
 
-    
+
     /*
      * ------------------------------------------------------------
      * Key generation

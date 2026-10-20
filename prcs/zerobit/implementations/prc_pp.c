@@ -63,9 +63,6 @@ struct ZBPRC_DecKey {
 };
 
 
-
-
-
 static int
 invert_permutation(
     const size_t *p,
@@ -77,7 +74,6 @@ invert_permutation(
 
     return 0;
 }
-
 
 
 /*
@@ -575,7 +571,6 @@ sample_substituted_symbol(
  */
 
 
-
  uint8_t *
 zbprc_pp_encode_ws(
     const void *vparams,
@@ -603,7 +598,7 @@ zbprc_pp_encode_ws(
             key->symbol_bits,
             &encoded_bytes) != 0)
         return NULL;
-    
+
     uint8_t *encoded =
         calloc(encoded_bytes, 1);
 
@@ -787,8 +782,6 @@ zbprc_pp_encode_ws(
 }
 
 
-
-
 static uint8_t *
 zbprc_pp_encode(
     const void *vparams,
@@ -867,7 +860,6 @@ symbol_hamming_distance(
  */
 
 
-
 int
 zbprc_pp_decode_ws(
     const void *vparams,
@@ -902,7 +894,7 @@ zbprc_pp_decode_ws(
             &encoded_bytes) != 0)
         return 0;
 
-        
+
     /*
      * ------------------------------------------------------------
      * 1. Remove OTP.
@@ -919,7 +911,6 @@ zbprc_pp_decode_ws(
     if (!unmasked)
         return 0;
 
-        
 
     for (size_t i = 0; i < key->n; i++) {
 
@@ -946,7 +937,6 @@ zbprc_pp_decode_ws(
             symbol
         );
     }
-
 
 
     /*
@@ -1020,7 +1010,6 @@ zbprc_pp_decode_ws(
         return 0;
     }
 
-    
 
     if (ecc_decode(
             params->ecc,
@@ -1033,7 +1022,7 @@ zbprc_pp_decode_ws(
         return 0;
     }
 
-    
+
     /*
      * ------------------------------------------------------------
      * 4. Re-encode.
@@ -1048,7 +1037,6 @@ zbprc_pp_decode_ws(
         return 0;
     }
 
-    
 
     size_t reencoded_len =
         encoded_bytes;
@@ -1066,7 +1054,6 @@ zbprc_pp_decode_ws(
         return 0;
     }
 
-    
 
     /*
      * ------------------------------------------------------------
@@ -1091,11 +1078,9 @@ zbprc_pp_decode_ws(
         params->delta * (double)key->n)
         return 0;
 
-        
 
     return 1;
 }
-
 
 
 static int
@@ -1142,7 +1127,6 @@ zbprc_pp_decode(
         return decoded;
 
 }
-
 
 
 /*

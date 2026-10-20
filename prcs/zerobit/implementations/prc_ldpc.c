@@ -18,14 +18,11 @@
  */
 
 
-
-
 /*
  * ================================================================
  * Packed bit vector
  * ================================================================
  */
-
 
 
 static int sparse_row_contains(const SparseP *P,
@@ -75,9 +72,6 @@ void sample_sparse_p(RandomnessSource *random,
         }
     }
 }
-
-
-
 
 
 /*
@@ -135,9 +129,6 @@ ldpc_blocksize(const void *params_ptr){
         (const LDPCParams *)params_ptr;
     return params->n;
 }
-
-
-
 
 
 /*

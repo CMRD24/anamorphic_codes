@@ -112,8 +112,6 @@ static size_t words_for_bits(size_t bits)
 }
 
 
-
-
 static inline uint64_t *
 packed_matrix_row(const PackedMatrix *M,
                   size_t row)
@@ -327,7 +325,6 @@ size_t bitvector_weight(const BitVector *v)
  */
 
 
-
  PackedMatrix
 concat_g_matrices(
     const PackedG *G,
@@ -372,12 +369,6 @@ concat_g_matrices(
 }
 
 
-
-
-
-
-
-
  void kernel_basis_free(KernelBasis *K)
 {
     if (K == NULL)
@@ -403,7 +394,6 @@ concat_g_matrices(
 
  KernelBasis kernel_basis(const PackedMatrix *A)
 {
-    
 
 
     size_t *pivot_column =
@@ -582,10 +572,6 @@ concat_g_matrices(
 
     return K;
 }
-
-
-
-
 
 
  PackedG packed_g_alloc(size_t n,

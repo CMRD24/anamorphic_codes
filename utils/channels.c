@@ -1,42 +1,10 @@
 #include "channels.h"
+#include "helpers.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/*
- * ================================================================
- * Bit helpers
- * ================================================================
- */
-
-static inline uint8_t get_bit(
-    const uint8_t *data,
-    size_t index)
-{
-    return (uint8_t)((data[index >> 3] >>
-                      (index & 7)) &
-                     1u);
-}
-
-static inline void set_bit(
-    uint8_t *data,
-    size_t index,
-    uint8_t value)
-{
-    const uint8_t mask =
-        (uint8_t)(1u << (index & 7));
-
-    if (value)
-        data[index >> 3] |= mask;
-    else
-        data[index >> 3] &= (uint8_t)~mask;
-}
-
-static inline size_t bytes_for_bits(size_t bits)
-{
-    return (bits + 7) / 8;
-}
 
 /*
  * ================================================================
@@ -140,7 +108,7 @@ uint8_t *channel_edits(
     *output_bits = input_bits;
 
     const size_t output_bytes =
-        bytes_for_bits(input_bits);
+        bits_to_bytes(input_bits);
 
     uint8_t *output =
         calloc(output_bytes, 1);
@@ -208,7 +176,7 @@ uint8_t *channel_deletions_edits(
 
     uint8_t *output =
         calloc(
-            bytes_for_bits(max_output_bits),
+            bits_to_bytes(max_output_bits),
             1);
 
     if (output == NULL &&
@@ -268,7 +236,7 @@ uint8_t *channel_deletions_edits(
      * realloc(NULL, 0) semantics are avoided explicitly.
      */
     const size_t actual_bytes =
-        bytes_for_bits(written);
+        bits_to_bytes(written);
 
     if (actual_bytes == 0)
     {
@@ -336,7 +304,7 @@ uint8_t *channel_deletions_edits_insertions(
 
     uint8_t *output =
         calloc(
-            bytes_for_bits(max_output_bits),
+            bits_to_bytes(max_output_bits),
             1);
 
     if (output == NULL &&
@@ -443,7 +411,7 @@ uint8_t *channel_deletions_edits_insertions(
      * Shrink to the actual number of bytes.
      */
     const size_t actual_bytes =
-        bytes_for_bits(written);
+        bits_to_bytes(written);
 
     uint8_t *shrunk =
         realloc(output, actual_bytes);

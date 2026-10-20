@@ -16,10 +16,9 @@
 #include "../../../utils/random_utils.h"
 
 
-
 struct APRC_EncKey {
     PackedG *Subspace;
-    
+
 };
 
 
@@ -38,7 +37,6 @@ struct ZBPRC_DecKey {
     SparseP P;
     BitVector z;
 };
-
 
 
 void free_enc_akey(const void *params, const void *aparams, APRC_EncKey *key)
@@ -68,14 +66,22 @@ void free_dec_akey(const void *params, const void *aparams, APRC_DecKey *key)
 }
 
 
+/*
+ * Number r' of anamorphic parity checks P'. The anamorphic subspace
+ * ker(P'G) then has dimension g - r'.
+ */
+static size_t
+ldpc_num_anamorphic_checks(const LDPCParams *params)
+{
+    return params->g / 2;
+}
+
 
 APRC_Keys *
 ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_keys,
             RandomnessSource *random)
 {
-    //TODO get r_prime from aparams
-    const A_LDPCParams *aparams =
-        (const A_LDPCParams *)aparams_ptr;
+    (void)aparams_ptr;
 
     const LDPCParams *params =
         (const LDPCParams *)params_ptr;
@@ -115,7 +121,7 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
         return NULL;
     }
 
-    size_t r_prime = params->g/2;
+    size_t r_prime = ldpc_num_anamorphic_checks(params);
 
     /*
      * Sample P' until P'G has full row rank r'. Since
@@ -197,10 +203,9 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
 }
 
 
-
 uint8_t *
 ldpc_aencode(const void *params_ptr,
-            const void *aparams_ptr, 
+            const void *aparams_ptr,
             const ZBPRC_EncKey *key,
             const APRC_EncKey *dk,
             RandomnessSource *random,
@@ -216,9 +221,10 @@ ldpc_aencode(const void *params_ptr,
         random == NULL ||
         output_bits == NULL)
         return NULL;
-    
 
-    size_t k = params->g/2;
+
+    /* dimension of ker(P'G) */
+    size_t k = params->g - ldpc_num_anamorphic_checks(params);
     /*
      * s <- F_2^k
      */
@@ -319,7 +325,7 @@ ldpc_aencode(const void *params_ptr,
 
 int
 ldpc_adecode(const void *params_ptr,
-    const void *aparams_ptr, 
+    const void *aparams_ptr,
             const ZBPRC_DecKey *key,
             const APRC_DecKey *dk,
             const uint8_t *ciphertext,
@@ -328,12 +334,11 @@ ldpc_adecode(const void *params_ptr,
 
     (void)aparams_ptr;
 
-    
 
     const LDPCParams *params =
         (const LDPCParams *)params_ptr;
 
-    size_t r_prime = params->g/2;
+    size_t r_prime = ldpc_num_anamorphic_checks(params);
 
     if (params == NULL ||
         key == NULL ||
@@ -370,7 +375,7 @@ ldpc_adecode(const void *params_ptr,
      * P'c.
      */
     BitVector Pc =
-        bitvector_alloc(params->r);
+        bitvector_alloc(r_prime);
 
     sparse_p_mul(dk->P_prime,
                  &c,
@@ -380,7 +385,7 @@ ldpc_adecode(const void *params_ptr,
      * Pz.
      */
     BitVector Pz =
-        bitvector_alloc(params->r);
+        bitvector_alloc(r_prime);
 
     sparse_p_mul(dk->P_prime,
                  &key->z,
@@ -424,12 +429,6 @@ ldpc_adecode(const void *params_ptr,
 
     return result;
 }
-
-
-
-
-
-
 
 
 aZBPRC

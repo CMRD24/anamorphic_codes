@@ -10,7 +10,6 @@
 #include "../multibit/multibit_prc_rr.h"
 
 
-
 typedef struct {
 
     //number of seed bits
@@ -52,8 +51,6 @@ typedef struct {
 } APRC_RR_Keys;
 
 
-
-
 /*
  * ================================================================
  * anamorphic zerobit PRC interface for PRCs with randomness recoverability
@@ -63,10 +60,9 @@ typedef struct {
 typedef struct {
 
 
-
     const aZBPRC_RR_Params *aparams;
 
-    
+
     APRC_RR_Keys *(*akeygen)(
         const aZBPRC_RR_Params *aparams,
         RandomnessSource *random
@@ -107,12 +103,8 @@ typedef struct {
         APRC_RR_Keys *key
     );
 
-    
 
 } aZBPRC_RR;
-
-
-
 
 
 /*
@@ -124,10 +116,9 @@ typedef struct {
 typedef struct {
 
 
-
     const aMBPRC_RR_Params *aparams;
 
-    
+
     APRC_RR_Keys *(*akeygen)(
         const aMBPRC_RR_Params *aparams,
         RandomnessSource *random
@@ -170,7 +161,6 @@ typedef struct {
         APRC_RR_Keys *key
     );
 
-    
 
 } aMBPRC_RR;
 

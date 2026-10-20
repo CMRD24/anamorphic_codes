@@ -261,7 +261,7 @@ int wiretap_config_valid(const wiretap_config_t *cfg)
     if (cfg->K_bytes == 0 || cfg->K_bytes % 2 != 0)
         return 0;
 
-    
+
     if (cfg->security_parameter == 0)
         return 0;
 
@@ -276,7 +276,6 @@ int wiretap_config_valid(const wiretap_config_t *cfg)
     if (n == 0)
         return 0;
 
-    
 
     //TODO: proper validation of security parameter with K and error-correction block length
 
@@ -368,7 +367,6 @@ static int ecc_decode_block(
 }
 
 
-
 int wiretap_encode_ws(
     const wiretap_config_t *cfg,
     const uint8_t *seed,
@@ -382,7 +380,6 @@ int wiretap_encode_ws(
     uint8_t *s = NULL;
     uint8_t *v = NULL;
     uint8_t *r_next = NULL;
-    uint8_t *codeword = NULL;
     size_t total, n, q;
     int result = -1;
 
@@ -408,12 +405,11 @@ int wiretap_encode_ws(
     s = malloc(cfg->K_bytes);
     v = malloc(cfg->K_bytes);
     r_next = malloc(cfg->K_bytes);
-    codeword = malloc(n);
 
-    if (!seed || !r_prev || !s || !v || !r_next || !codeword)
+    if (!seed || !r_prev || !s || !v || !r_next)
         goto cleanup;
 
-    
+
     memcpy(r_prev, seed, cfg->K_bytes);
 
 
@@ -459,7 +455,6 @@ cleanup:
     free(s);
     free(v);
     free(r_next);
-    free(codeword);
 
     if (result != 0)
         *output_len = 0;
@@ -585,7 +580,7 @@ int wiretap_aencode(
         return -1;
 
     /* seed = nonce || (PRF(akey, nonce) XOR m_a), exactly K_bytes long */
-    if (!encrypt(
+    if (encrypt(
             akey,
             cfg->K_bytes - acfg->ana_message_length,
             amessage,
@@ -647,21 +642,18 @@ int wiretap_adecode(
     if (wiretap_seed_decode(cfg, ciphertext, ciphertext_len, seed) != 0)
         goto cleanup;
 
-    if (decrypt(
-            akey,
-            cfg->K_bytes - acfg->ana_message_length,
-            seed,
-            output,
-            acfg->ana_message_length))
-        result = 0;
+    result = decrypt(
+        akey,
+        cfg->K_bytes - acfg->ana_message_length,
+        seed,
+        output,
+        acfg->ana_message_length);
 
 cleanup:
     sodium_memzero(seed, cfg->K_bytes);
     free(seed);
     return result;
 }
-
-
 
 
 int wiretap_decode(
@@ -676,7 +668,6 @@ int wiretap_decode(
     uint8_t *v = NULL;
     uint8_t *s = NULL;
     uint8_t *r_next = NULL;
-    uint8_t *block = NULL;
     size_t n, decoded_len, q;
     int result = -1;
 
@@ -700,9 +691,8 @@ int wiretap_decode(
     v = malloc(cfg->K_bytes);
     s = malloc(cfg->K_bytes);
     r_next = malloc(cfg->K_bytes);
-    block = malloc(cfg->K_bytes);
 
-    if (!r_prev || !v || !s || !r_next || !block)
+    if (!r_prev || !v || !s || !r_next)
         goto cleanup;
 
     /* r_0 = ECC.Decode(c_0) */
@@ -743,13 +733,11 @@ cleanup:
     if (v) sodium_memzero(v, cfg->K_bytes);
     if (s) sodium_memzero(s, cfg->K_bytes);
     if (r_next) sodium_memzero(r_next, cfg->K_bytes);
-    if (block) sodium_memzero(block, cfg->K_bytes);
 
     free(r_prev);
     free(v);
     free(s);
     free(r_next);
-    free(block);
 
     if (result != 0)
         *output_len = 0;

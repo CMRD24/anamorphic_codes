@@ -1,6 +1,7 @@
 #include "prc_cca.h"
 #include "../../../utils/csprg_sodium.h"
 #include "../../../utils/helpers.h"
+#include "shared_enc_key.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -10,11 +11,6 @@
 #include <stdio.h>
 
 #include <sodium.h>
-
-
-
-
-
 
 
 /*
@@ -35,16 +31,12 @@ struct MBPRC_EncKey {
 
 struct MBPRC_DecKey {
 
-    
 
     uint8_t *hash_key;
     MBPRC_DecKey *underlying_dec;
     MBPRC_EncKey *underlying_enc;
     int *refs;
 };
-
-
-
 
 
 /*
@@ -71,26 +63,6 @@ cca_blocksize(
  * Key generation
  * ================================================================
  */
-
-/*
- * The decoding key keeps a handle on the underlying encoding key. Both keys
- * share it through a reference count so they can be freed in any order.
- */
-static void
-release_underlying_enc(
-    const PRC_CCA_Params *params,
-    MBPRC_EncKey *key,
-    int *refs)
-{
-    if (!key)
-        return;
-
-    if (refs && --*refs > 0)
-        return;
-
-    params->prc->free_enc_key(params->prc->params, key);
-    free(refs);
-}
 
 
 static MBPRC_Keys *
@@ -119,9 +91,6 @@ cca_keygen(
 
     if (!underlying)
         return NULL;
-
-
-
 
 
     struct MBPRC_EncKey *enc =
@@ -189,7 +158,6 @@ cca_keygen(
 
         return NULL;
     }
-
 
 
     /*
@@ -274,7 +242,6 @@ cca_keygen(
  */
 
 
-
 static uint8_t *
 cca_encode_ws(
     const void *vparams,
@@ -352,7 +319,7 @@ cca_encode_ws(
     );
 
 
-    //compute hash: 
+    //compute hash:
 
     size_t hash_key_bytes =
     bits_to_bytes(params->lambda_bits);
@@ -370,7 +337,6 @@ cca_encode_ws(
     {
         return 0;
     }
-
 
 
     //expand the output size of the hash output to whatever length necessary:
@@ -399,7 +365,6 @@ cca_encode_ws(
         return NULL;
     }
 
-    
 
     size_t encoded_message_bits =
         rm_bits + lambda;
@@ -439,9 +404,6 @@ cca_encode_ws(
     //pseudo now contains r1
 
 
-
-
-
     uint8_t *ciphertext =
         params->prc->encode(
             params->prc->params,
@@ -458,7 +420,6 @@ cca_encode_ws(
         );
 
 
-
     free(encoded_message);
     csprg_randomness_free(&pseudo);
     free(r2);
@@ -466,7 +427,6 @@ cca_encode_ws(
 
     return ciphertext;
 }
-
 
 
 static uint8_t *cca_encode(
@@ -545,7 +505,6 @@ cca_decode_ws(
         !message_out ||
         !message_bits_out)
         return 0;
-
 
 
     size_t lambda =
@@ -688,7 +647,7 @@ cca_decode_ws(
     );
 
 
-    //compute hash: 
+    //compute hash:
 
     size_t hash_key_bytes =
     bits_to_bytes(params->lambda_bits);
@@ -706,7 +665,6 @@ cca_decode_ws(
     {
         return 0;
     }
-
 
 
     //expand the output size of the hash output to whatever length necessary:
@@ -737,9 +695,6 @@ cca_decode_ws(
     }
 
 
-
-
-
     /*
      * ------------------------------------------------------------
      * 4. Verify R2 == R2'
@@ -759,7 +714,6 @@ cca_decode_ws(
 
         return 0;
     }
-
 
 
     //reencode the message using pseudo
@@ -824,8 +778,6 @@ cca_decode_ws(
         message_bits;
 
 
-    
-
     csprg_randomness_free(&pseudo);
     free(ciphertext_tilde);
     free(r2_tilde);
@@ -862,10 +814,9 @@ cca_decode(
         return 0;
 
 
-
     size_t lambda =
         params->lambda_bits;
-    
+
         size_t lambda_bytes =
         bits_to_bytes(lambda);
 
@@ -905,7 +856,7 @@ cca_free_enc_key(
     if (!key)
         return;
 
-    release_underlying_enc(params, key->underlying, key->refs);
+    mbprc_release_shared_enc_key(params->prc, key->underlying, key->refs);
 
     size_t hash_key_bytes =
     bits_to_bytes(params->lambda_bits);
@@ -919,7 +870,7 @@ cca_free_enc_key(
         );
 
         free(key->hash_key);
-    }    
+    }
 
     free(key);
 }
@@ -948,7 +899,7 @@ cca_free_dec_key(
         );
     }
 
-    release_underlying_enc(params, key->underlying_enc, key->refs);
+    mbprc_release_shared_enc_key(params->prc, key->underlying_enc, key->refs);
 
     size_t hash_key_bytes =
     bits_to_bytes(params->lambda_bits);
@@ -1013,7 +964,7 @@ prc_cca_rr(
         .base = prc_cca(params),
         .decode_ws = cca_decode_ws,
         .encode_ws = cca_encode_ws
-        
+
     };
 
     return result;

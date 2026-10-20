@@ -17,7 +17,7 @@ static inline void error(){
                 "secure randomness failure.\n");
 
         exit(EXIT_FAILURE);
-        
+
 }
 
 /*
@@ -138,10 +138,6 @@ static inline void error(){
             bit_set(v, i, 1);
     }
 }
-
-
-
-
 
 
 size_t

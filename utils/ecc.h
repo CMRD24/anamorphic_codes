@@ -90,8 +90,6 @@ typedef struct {
 //convenience
 
 
-
-
 static inline size_t
 ecc_encoded_size(
     const ECC *ecc, size_t input_length)
@@ -135,9 +133,6 @@ ecc_decode(
         input, input_len, output, output_len
     );
 }
-
-
-
 
 
 #endif /* ECC_H */

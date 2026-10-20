@@ -3,6 +3,7 @@
 #include "utils/hamming74.h"
 #include "utils/none_ecc.h"
 #include "prcs/anamorphism/aprc_rr.h"
+#include "main_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,8 +11,6 @@
 #include <stdint.h>
 
 #define AMESSAGE_SIZE 16
-
-
 
 
 static void
@@ -102,9 +101,6 @@ int main(void)
 
     print_usage();
 
-
-     
-    
 
     /*
      * ============================================================

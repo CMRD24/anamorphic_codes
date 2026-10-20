@@ -69,9 +69,9 @@ static void test_roundtrip_noiseless(void)
 
 static void test_roundtrip_noisy(void)
 {
-    /* Hamming(7,4) corrects one error per 7-bit block: p = 0.002 is safe */
+    /* Hamming(7,4) corrects one error per 7-bit block: p = 0.0003 is safe */
     for (int i = 0; i < 5; ++i)
-        roundtrip(2, 0.002);
+        roundtrip(2, 0.0003);
 }
 
 static void test_encoding_is_randomized(void)

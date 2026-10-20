@@ -86,6 +86,7 @@ target_link_libraries(prc_ldpc PRIVATE
 add_library(prc_pp_impl STATIC
     prcs/zerobit/implementations/prc_pp.c
     prcs/anamorphism/azbprc_rr.c
+    prcs/anamorphism/rr_core.c
 )
 
 target_include_directories(prc_pp_impl PUBLIC
@@ -157,7 +158,6 @@ target_link_libraries(prc_low PRIVATE
 )
 
 
-
 # ============================================================
 # high multi PRC
 # ============================================================
@@ -183,8 +183,6 @@ add_executable(prc_high
 target_link_libraries(prc_high PRIVATE
     prc_high_impl
 )
-
-
 
 
 # ============================================================
@@ -214,7 +212,6 @@ target_link_libraries(prc_sharp PRIVATE
 )
 
 
-
 # ============================================================
 # cca multi PRC
 # ============================================================
@@ -224,6 +221,7 @@ add_library(prc_cca_impl STATIC
     prcs/multibit/implementations/prc_low.c
     prcs/multibit/implementations/prc_cca.c
     prcs/anamorphism/ambprc_rr.c
+    prcs/anamorphism/rr_core.c
 )
 
 target_include_directories(prc_cca_impl PUBLIC
@@ -269,30 +267,5 @@ target_link_libraries(rlnc PRIVATE
     rlnc_impl
 )
 
-# ============================================================
-# PP PRC
-# ============================================================
-
-# Uncomment/adapt when you have the implementation.
-
-# add_library(prc_pp STATIC
-#     prcs/pp/implementations/prc_pp.c
-# )
-#
-# target_include_directories(prc_pp PUBLIC
-#     ${CMAKE_CURRENT_SOURCE_DIR}
-# )
-#
-# target_link_libraries(prc_pp PUBLIC
-#     prc_utils
-# )
-#
-# add_executable(main_pp
-#     main_pp.c
-# )
-#
-# target_link_libraries(main_pp PRIVATE
-#     prc_pp
-# )
 enable_testing()
 add_subdirectory(tests)

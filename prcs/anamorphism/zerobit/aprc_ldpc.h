@@ -17,7 +17,6 @@ typedef struct {
 } A_LDPCParams;
 
 
-
 aZBPRC
 aprc_ldpc(const A_LDPCParams *aparams);
 

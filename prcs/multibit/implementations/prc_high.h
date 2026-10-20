@@ -55,7 +55,7 @@ typedef struct {
      * Security parameter lambda in bits.
      *
      * Must be a multiple of 8 because the PRG seed is represented
-     * as a byte array. 
+     * as a byte array.
      */
     size_t lambda;
 
