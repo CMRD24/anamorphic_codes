@@ -93,40 +93,80 @@ int wiretap_oaep4_inverse(
     uint8_t *output);
 
 
+/*
+ * Encode with a given seed r_0 (K_bytes bytes) instead of a fresh uniform one.
+ * wiretap_encode samples the seed uniformly; the anamorphic encoder below
+ * sets it to a pseudorandom encryption of the anamorphic message.
+ */
+int wiretap_encode_ws(
+    const wiretap_config_t *cfg,
+    const uint8_t *seed,
+    const uint8_t *message,
+    size_t message_len,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_len);
 
-//anamorphic:
-
-//todo: define anamorphic construction first.
-
-// uint8_t *wiretap_akeygen();
-
-// int wiretap_aencode(
-//     const wiretap_config_t *cfg,
-//     RandomnessSource *rng,
-//     const uint8_t *message,
-//     size_t message_len,
-//     uint8_t *output,
-//     size_t output_capacity,
-//     size_t *output_len,
-//     const unsigned char *akey,
-//     uint8_t amessage
-
-// );
-
-// int wiretap_adecode(
-//     const wiretap_config_t *cfg,
-//     const uint8_t *ciphertext,
-//     size_t ciphertext_len,
-//     uint8_t *output,
-//     size_t output_capacity,
-//     size_t *output_len,
-//     const unsigned char *akey);
+/* r_0 = ECC.Decode(c_0). seed_out must hold K_bytes. 0 on success, -1 on error. */
+int wiretap_seed_decode(
+    const wiretap_config_t *cfg,
+    const uint8_t *ciphertext,
+    size_t ciphertext_len,
+    uint8_t *seed_out);
 
 
-//ana_message_length in bytes
+/*
+ * Anamorphic wiretap code (randomness recoverability).
+ *
+ * The seed r_0 is set to Enc(akey, m_a) = nonce || (PRF(akey, nonce) XOR m_a),
+ * with K_bytes - ana_message_length >= 16 nonce bytes. The key is symmetric
+ * (double key = trapdoor key). Encryption is not authenticated, so adecode
+ * returns some message for any ciphertext whose first block decodes; it is
+ * not robust in the sense of the framework unless the encryption is made
+ * authenticated.
+ */
+
+/* ana_message_length in bytes */
 typedef struct {
     size_t ana_message_length;
 } wiretap_ana_config_t;
+
+int wiretap_ana_config_valid(
+    const wiretap_config_t *cfg,
+    const wiretap_ana_config_t *acfg);
+
+/* crypto_generichash_KEYBYTES random bytes; free with wiretap_akey_free */
+uint8_t *wiretap_akeygen(void);
+void wiretap_akey_free(uint8_t *akey);
+
+/*
+ * Encodes message (a multiple of K_bytes) with amessage
+ * (acfg->ana_message_length bytes) hidden in the seed.
+ * Returns 0 on success, -1 on error. Regular wiretap_decode still
+ * recovers message.
+ */
+int wiretap_aencode(
+    const wiretap_config_t *cfg,
+    const wiretap_ana_config_t *acfg,
+    const uint8_t *akey,
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t *amessage,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_len);
+
+/*
+ * Recovers the anamorphic message; output must hold
+ * acfg->ana_message_length bytes. Returns 0 on success, -1 on error.
+ */
+int wiretap_adecode(
+    const wiretap_config_t *cfg,
+    const wiretap_ana_config_t *acfg,
+    const uint8_t *akey,
+    const uint8_t *ciphertext,
+    size_t ciphertext_len,
+    uint8_t *output);
 
 
 #endif /* WIRETAP_H */

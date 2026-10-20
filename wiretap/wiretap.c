@@ -371,7 +371,7 @@ static int ecc_decode_block(
 
 int wiretap_encode_ws(
     const wiretap_config_t *cfg,
-    uint8_t *seed,
+    const uint8_t *seed,
     const uint8_t *message,
     size_t message_len,
     uint8_t *output,
@@ -477,70 +477,152 @@ int wiretap_encode(
     size_t output_capacity,
     size_t *output_len)
 {
+    uint8_t *seed;
+    int result;
 
-    uint8_t *seed = malloc(cfg->K_bytes);
+    if (output_len)
+        *output_len = 0;
+
+    if (!wiretap_config_valid(cfg) || !random)
+        return -1;
+
+    seed = malloc(cfg->K_bytes);
+    if (!seed)
+        return -1;
 
     random_bytes(random, seed, cfg->K_bytes);
 
-    return wiretap_encode_ws(cfg, seed, message, message_len, output, output_capacity, output_len);
-    //TODO: free seed!
+    result = wiretap_encode_ws(
+        cfg, seed, message, message_len,
+        output, output_capacity, output_len);
+
+    sodium_memzero(seed, cfg->K_bytes);
+    free(seed);
+
+    return result;
 }
 
-//both amessage_length and message_length in bytes!
+
+/* ------------------------------------------------------------------------
+ * Anamorphism from randomness recoverability.
+ *
+ * The seed r_0 of the wiretap code is recoverable by the receiver
+ * (r_0 = ECC.Decode(c_0)). The regular sender samples it uniformly; the
+ * anamorphic sender instead sets
+ *
+ *     r_0 = Enc(akey, m_a) = nonce || (PRF(akey, nonce) XOR m_a)
+ *
+ * which is pseudorandom without akey. The anamorphic receiver recovers r_0
+ * from the first ECC block and decrypts it.
+ * ------------------------------------------------------------------------ */
+
+/* Minimum nonce length (bytes) of the pseudorandom encryption of the seed. */
+#define WT_MIN_NONCE_BYTES 16
+
+int wiretap_ana_config_valid(
+    const wiretap_config_t *cfg,
+    const wiretap_ana_config_t *acfg)
+{
+    if (!wiretap_config_valid(cfg) || !acfg)
+        return 0;
+
+    if (acfg->ana_message_length == 0 ||
+        acfg->ana_message_length > cfg->K_bytes ||
+        cfg->K_bytes - acfg->ana_message_length < WT_MIN_NONCE_BYTES)
+        return 0;
+
+    return 1;
+}
+
+uint8_t *wiretap_akeygen(void)
+{
+    uint8_t *akey;
+
+    if (sodium_init() < 0)
+        return NULL;
+
+    akey = malloc(crypto_generichash_KEYBYTES);
+    if (akey)
+        crypto_generichash_keygen(akey);
+
+    return akey;
+}
+
+void wiretap_akey_free(uint8_t *akey)
+{
+    if (!akey)
+        return;
+
+    sodium_memzero(akey, crypto_generichash_KEYBYTES);
+    free(akey);
+}
+
 int wiretap_aencode(
     const wiretap_config_t *cfg,
     const wiretap_ana_config_t *acfg,
-    RandomnessSource *random,
+    const uint8_t *akey,
     const uint8_t *message,
     size_t message_len,
-    const uint8_t *akey,
     const uint8_t *amessage,
     uint8_t *output,
     size_t output_capacity,
     size_t *output_len)
 {
+    uint8_t *seed;
+    int result = -1;
 
-    size_t enc_seed_len = cfg->K_bytes - acfg->ana_message_length;
+    if (output_len)
+        *output_len = 0;
 
-    
-    uint8_t *seed = malloc(cfg->K_bytes);
+    if (!wiretap_ana_config_valid(cfg, acfg) || !akey || !amessage)
+        return -1;
 
-    encrypt(akey, enc_seed_len, amessage, acfg->ana_message_length, seed);
+    if (sodium_init() < 0)
+        return -1;
 
-    
+    seed = malloc(cfg->K_bytes);
+    if (!seed)
+        return -1;
 
-    return wiretap_encode_ws(cfg, seed, message, message_len, output, output_capacity, output_len);
-    //TODO free seed!
+    /* seed = nonce || (PRF(akey, nonce) XOR m_a), exactly K_bytes long */
+    if (!encrypt(
+            akey,
+            cfg->K_bytes - acfg->ana_message_length,
+            amessage,
+            acfg->ana_message_length,
+            seed))
+        goto cleanup;
+
+    result = wiretap_encode_ws(
+        cfg, seed, message, message_len,
+        output, output_capacity, output_len);
+
+cleanup:
+    sodium_memzero(seed, cfg->K_bytes);
+    free(seed);
+    return result;
 }
 
-
-
+/* r_0 = ECC.Decode(c_0); seed_out must hold K_bytes. 0 on success, -1 on error */
 int wiretap_seed_decode(
     const wiretap_config_t *cfg,
     const uint8_t *ciphertext,
+    size_t ciphertext_len,
     uint8_t *seed_out)
 {
-    
-    size_t n, decoded_len, q;
-    int result = -1;
+    size_t n;
 
-    if (!wiretap_config_valid(cfg) || !ciphertext)
+    if (!wiretap_config_valid(cfg) || !ciphertext || !seed_out)
         return -1;
 
     n = wiretap_codeword_size(cfg);
 
-
-    /* r_0 = ECC.Decode(c_0) */
-    if (ecc_decode_block(
-            cfg->ecc, ciphertext, n,
-            seed_out, cfg->K_bytes) != 0)
+    if (n == 0 || ciphertext_len < n)
         return -1;
 
+    return ecc_decode_block(cfg->ecc, ciphertext, n, seed_out, cfg->K_bytes);
 }
 
-//returns an output of exactly acfg->ana_message_length; bytes
-//output must have at least size acfg->ana_message_length
-//-1 on failure
 int wiretap_adecode(
     const wiretap_config_t *cfg,
     const wiretap_ana_config_t *acfg,
@@ -549,21 +631,34 @@ int wiretap_adecode(
     size_t ciphertext_len,
     uint8_t *output)
 {
+    uint8_t *seed;
+    int result = -1;
 
-    size_t enc_seed_len = cfg->K_bytes - acfg->ana_message_length;
-
-    
-    uint8_t *seed = malloc(cfg->K_bytes);
-
-    if(wiretap_seed_decode(cfg, ciphertext, seed)<0){
-        free(seed);
+    if (!wiretap_ana_config_valid(cfg, acfg) || !akey || !output)
         return -1;
-    }
 
-    int status = decrypt(akey, enc_seed_len, seed, output, acfg->ana_message_length);
+    if (sodium_init() < 0)
+        return -1;
 
+    seed = malloc(cfg->K_bytes);
+    if (!seed)
+        return -1;
+
+    if (wiretap_seed_decode(cfg, ciphertext, ciphertext_len, seed) != 0)
+        goto cleanup;
+
+    if (decrypt(
+            akey,
+            cfg->K_bytes - acfg->ana_message_length,
+            seed,
+            output,
+            acfg->ana_message_length))
+        result = 0;
+
+cleanup:
+    sodium_memzero(seed, cfg->K_bytes);
     free(seed);
-    return status;
+    return result;
 }
 
 

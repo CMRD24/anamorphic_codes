@@ -105,6 +105,71 @@ static void test_bad_arguments(void)
     CHECK(wiretap_decode(&cfg, out, 5, out, sizeof out, &olen) != 0);
 }
 
+static void test_anamorphic(void)
+{
+    ECC ecc = hamming74_ecc();
+    wiretap_config_t cfg = {.K_bytes = 32, .security_parameter = 128, .ecc = &ecc};
+    wiretap_ana_config_t acfg = {.ana_message_length = 16};
+
+    CHECK(wiretap_ana_config_valid(&cfg, &acfg));
+    /* nonce must keep at least 16 bytes */
+    wiretap_ana_config_t too_long = {.ana_message_length = 24};
+    wiretap_ana_config_t zero = {.ana_message_length = 0};
+    CHECK(!wiretap_ana_config_valid(&cfg, &too_long));
+    CHECK(!wiretap_ana_config_valid(&cfg, &zero));
+
+    uint8_t *k1 = wiretap_akeygen(), *k2 = wiretap_akeygen();
+    CHECK(k1 && k2);
+
+    size_t mlen = 3 * cfg.K_bytes;
+    size_t cap = wiretap_encoded_size(&cfg, mlen);
+    uint8_t *msg = malloc(mlen), *ct = malloc(cap), *dec = malloc(mlen);
+    uint8_t am[16], out[16];
+
+    for (int t = 0; t < 10; ++t) {
+        rng.rng(rng.ctx, msg, mlen);
+        rng.rng(rng.ctx, am, sizeof am);
+        size_t clen = 0, dlen = 0;
+
+        CHECK(wiretap_aencode(&cfg, &acfg, k1, msg, mlen, am, ct, cap, &clen) == 0);
+        CHECK(clen == cap);
+
+        /* preserved regular functionality */
+        CHECK(wiretap_decode(&cfg, ct, clen, dec, mlen, &dlen) == 0);
+        CHECK(dlen == mlen && memcmp(dec, msg, mlen) == 0);
+
+        /* anamorphic decoding, also after channel noise */
+        memset(out, 0, sizeof out);
+        CHECK(wiretap_adecode(&cfg, &acfg, k1, ct, clen, out) == 0);
+        CHECK(memcmp(out, am, sizeof am) == 0);
+
+        test_bsc(ct, clen * 8, 0.0005, &rng);
+        memset(out, 0, sizeof out);
+        CHECK(wiretap_adecode(&cfg, &acfg, k1, ct, clen, out) == 0);
+        CHECK(memcmp(out, am, sizeof am) == 0);
+
+        /* a different key does not reveal the message */
+        CHECK(wiretap_adecode(&cfg, &acfg, k2, ct, clen, out) != 0 ||
+              memcmp(out, am, sizeof am) != 0);
+    }
+
+    /* the seed block of anamorphic codewords differs between encodings of the
+     * same message (fresh nonce) */
+    uint8_t *ct2 = malloc(cap);
+    size_t l1, l2;
+    CHECK(wiretap_aencode(&cfg, &acfg, k1, msg, mlen, am, ct, cap, &l1) == 0);
+    CHECK(wiretap_aencode(&cfg, &acfg, k1, msg, mlen, am, ct2, cap, &l2) == 0);
+    CHECK(memcmp(ct, ct2, l1) != 0);
+
+    /* argument checks */
+    size_t ol;
+    CHECK(wiretap_aencode(&cfg, &acfg, NULL, msg, mlen, am, ct, cap, &ol) != 0);
+    CHECK(wiretap_adecode(&cfg, &acfg, k1, ct, 3, out) != 0);
+
+    free(ct2); free(msg); free(ct); free(dec);
+    wiretap_akey_free(k1); wiretap_akey_free(k2);
+}
+
 int main(void)
 {
     if (sodium_init() < 0)
@@ -117,6 +182,7 @@ int main(void)
     RUN(test_roundtrip_noisy);
     RUN(test_encoding_is_randomized);
     RUN(test_bad_arguments);
+    RUN(test_anamorphic);
 
     return test_summary("wiretap");
 }
