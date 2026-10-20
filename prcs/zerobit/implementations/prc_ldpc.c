@@ -25,15 +25,17 @@
  */
 
 
+/* Is col among the first `placed` positions of the row? */
 static int sparse_row_contains(const SparseP *P,
                                size_t row,
+                               size_t placed,
                                size_t col)
 {
     size_t base =
         row * P->t;
 
     for (size_t j = 0;
-         j < P->t;
+         j < placed;
          ++j) {
 
         if (P->positions[base + j] == col)
@@ -61,6 +63,7 @@ void sample_sparse_p(RandomnessSource *random,
 
             if (!sparse_row_contains(P,
                                      row,
+                                     placed,
                                      col)) {
 
                 P->positions[

@@ -22,21 +22,22 @@ size_t rr_message_bytes(const RRShape *shape)
     return rr_seed_bytes(shape) * (shape->mu - shape->indication_len - 1);
 }
 
-APRC_RR_Keys *rr_akeygen(void)
+APRC_RR_Keys *rr_akeygen(RandomnessSource *random)
 {
     APRC_RR_Keys *keys = malloc(sizeof(*keys));
     uint8_t *prf_key = malloc(crypto_generichash_KEYBYTES);
     uint8_t *encryption_key = malloc(crypto_generichash_KEYBYTES);
 
-    if (keys == NULL || prf_key == NULL || encryption_key == NULL) {
+    if (keys == NULL || prf_key == NULL || encryption_key == NULL ||
+        random == NULL || random->rng == NULL) {
         free(keys);
         free(prf_key);
         free(encryption_key);
         return NULL;
     }
 
-    crypto_generichash_keygen(prf_key);
-    crypto_generichash_keygen(encryption_key);
+    random_bytes(random, prf_key, crypto_generichash_KEYBYTES);
+    random_bytes(random, encryption_key, crypto_generichash_KEYBYTES);
 
     keys->prf_key = prf_key;
     keys->encryption_key = encryption_key;

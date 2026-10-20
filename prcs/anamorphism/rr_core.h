@@ -25,7 +25,8 @@ size_t rr_seed_bytes(const RRShape *shape);
 /* Length in bytes of the anamorphic message; 0 if the shape is invalid. */
 size_t rr_message_bytes(const RRShape *shape);
 
-APRC_RR_Keys *rr_akeygen(void);
+/* Keys are drawn from random, so a deterministic source gives reproducible keys. */
+APRC_RR_Keys *rr_akeygen(RandomnessSource *random);
 void rr_akey_free(APRC_RR_Keys *keys);
 
 /*

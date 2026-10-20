@@ -5,9 +5,7 @@ target_link_libraries(test_rlnc PRIVATE rlnc_impl)
 add_test(NAME rlnc COMMAND test_rlnc)
 
 add_executable(test_prc_zerobit test_prc_zerobit.c)
-target_link_libraries(test_prc_zerobit PRIVATE prc_ldpc_impl prc_pp_impl)
-target_sources(test_prc_zerobit PRIVATE
-    ${CMAKE_SOURCE_DIR}/prcs/zerobit/implementations/prc_dc.c)
+target_link_libraries(test_prc_zerobit PRIVATE prc_ldpc_impl prc_pp_impl prc_dc_impl)
 add_test(NAME prc_zerobit COMMAND test_prc_zerobit)
 
 add_executable(test_prc_multibit test_prc_multibit.c)
@@ -26,3 +24,8 @@ if(OpenSSL_FOUND)
 else()
     message(WARNING "OpenSSL not found: wiretap test disabled")
 endif()
+
+
+# Command line front ends (all demo_<code> programs)
+add_test(NAME demos
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/demo_smoke.sh ${CMAKE_BINARY_DIR})

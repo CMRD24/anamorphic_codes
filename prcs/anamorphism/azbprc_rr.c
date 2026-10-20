@@ -20,9 +20,8 @@ static APRC_RR_Keys *akeygen(
     RandomnessSource *random)
 {
     (void)aparams;
-    (void)random;
 
-    return rr_akeygen();
+    return rr_akeygen(random);
 }
 
 static void akeygen_free(const aZBPRC_RR_Params *aparams, APRC_RR_Keys *keys)
