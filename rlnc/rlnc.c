@@ -474,23 +474,24 @@ int rlnc_decode(
         return -1;
 
     const size_t K = cfg->generation_size;
+    const size_t R = received_count;
     const unsigned m = field_bits(cfg->q);
     const size_t symbols = symbol_count(cfg);
 
     /*
-     * Work on K independent packets.
+     * Work on all received packets: the first K need not be independent.
      *
      * Each row consists of:
      *
      *     [ global vector | payload symbols ]
      */
     uint32_t **matrix =
-        calloc(K, sizeof(uint32_t *));
+        calloc(R, sizeof(uint32_t *));
 
     if (matrix == NULL)
         return -1;
 
-    for (size_t r = 0; r < K; ++r) {
+    for (size_t r = 0; r < R; ++r) {
         matrix[r] =
             calloc(K + symbols, sizeof(uint32_t));
 
@@ -525,14 +526,14 @@ int rlnc_decode(
     for (size_t col = 0; col < K; ++col) {
         size_t pivot = col;
 
-        while (pivot < K && matrix[pivot][col] == 0)
+        while (pivot < R && matrix[pivot][col] == 0)
             ++pivot;
 
-        if (pivot == K) {
+        if (pivot == R) {
             /*
              * The received global vectors are not linearly independent.
              */
-            for (size_t i = 0; i < K; ++i)
+            for (size_t i = 0; i < R; ++i)
                 free(matrix[i]);
 
             free(matrix);
@@ -559,7 +560,7 @@ int rlnc_decode(
         /*
          * Eliminate this column from all other rows.
          */
-        for (size_t row = 0; row < K; ++row) {
+        for (size_t row = 0; row < R; ++row) {
             if (row == col)
                 continue;
 
@@ -593,7 +594,7 @@ int rlnc_decode(
     out[row].global[row] = 1;
     }
 
-    for (size_t i = 0; i < K; ++i)
+    for (size_t i = 0; i < R; ++i)
         free(matrix[i]);
 
     free(matrix);

@@ -10,7 +10,7 @@
 
 
 
-uint8_t prf_bit(const unsigned char *key,
+static uint8_t prf_bit(const unsigned char *key,
                 const unsigned char *input,
                 size_t input_len)
 {
@@ -31,7 +31,7 @@ uint8_t prf_bit(const unsigned char *key,
 
 
 
-APRC_RR_Keys *akeygen(
+static APRC_RR_Keys *akeygen(
         const aMBPRC_RR_Params *aparams,
         RandomnessSource *random
 ) {
@@ -62,8 +62,9 @@ APRC_RR_Keys *akeygen(
     return keys;
 }
 
-void akeygen_free(const aMBPRC_RR_Params *aparams, APRC_RR_Keys *keys)
+static void akeygen_free(const void *params, const void *aparams, APRC_RR_Keys *keys)
 {
+    (void)params;
     (void)aparams;
 
     if (keys == NULL) {
@@ -96,7 +97,7 @@ void akeygen_free(const aMBPRC_RR_Params *aparams, APRC_RR_Keys *keys)
  * Returns an array of mu codewords. Each codeword is represented as a
  * byte array; its individual length is determined by prc_rr->base.
  */
-uint8_t **aencode(
+static uint8_t **aencode(
     const aMBPRC_RR_Params *aparams,
     const MBPRC_EncKey *reg_key,
         const APRC_RR_Keys *dkey,
@@ -108,7 +109,6 @@ uint8_t **aencode(
 )
 {
 
-    printf("ma1\n");
 
     if (aparams == NULL ||
         dkey == NULL ||
@@ -123,7 +123,6 @@ uint8_t **aencode(
         return NULL;
     }
 
-    printf("ma2\n");
 
 
     const size_t k  = aparams->seed_len;
@@ -133,7 +132,6 @@ uint8_t **aencode(
     if (k == 0 || mu == 0 || z > mu)
         return NULL;
 
-    printf("ma2a\n");
 
     /*
      * The construction requires the SKE ciphertext to contain
@@ -176,13 +174,11 @@ uint8_t **aencode(
                 ana_message,
                 ana_message_bits/8,
                 encrypted)) {
-            printf("here\n");
             free(encrypted);
             return NULL;
         }
     }
 
-    printf("ma3\n");
 
 
     /*
@@ -202,7 +198,6 @@ uint8_t **aencode(
         return NULL;
     }
 
-    printf("ma4\n");
 
     /*
      * Generate the indication seeds.
@@ -236,7 +231,6 @@ uint8_t **aencode(
         ) != 0);
     }
 
-    printf("ma5\n");
 
 
     /*
@@ -264,7 +258,6 @@ uint8_t **aencode(
         return NULL;
     }
 
-    printf("ma6\n");
 
     size_t codeword_bits = 0;
 
@@ -325,7 +318,6 @@ uint8_t **aencode(
         }
     }
 
-    printf("ma7\n");
 
 
     *output_bits = codeword_bits;
@@ -347,7 +339,7 @@ uint8_t **aencode(
 
 
 
-int adecode(
+static int adecode(
     const aMBPRC_RR_Params *aparams,
     const MBPRC_DecKey *reg_key,
     const APRC_RR_Keys *dkey,
@@ -358,7 +350,6 @@ int adecode(
 )
 {
 
-    printf("dma1\n");
 
     if (aparams == NULL ||
         dkey == NULL ||
@@ -370,7 +361,6 @@ int adecode(
         return 0;
     }
 
-    printf("dma2\n");
 
 
     const size_t k  = aparams->seed_len;
@@ -380,7 +370,6 @@ int adecode(
     if (k == 0 || mu == 0 || z > mu)
         return 0;
 
-    printf("dma3\n");
 
 
     const size_t encrypted_bits = k * (mu - z);
@@ -408,8 +397,6 @@ int adecode(
 
         size_t reg_bits_out = 0;
 
-        printf("ciphertext bits: %zu", ciphertext_bits);
-        printf("reg_message bits: %zu", reg_message_bits);
 
         if (!aparams->prc_rr->decode_ws(
                 aparams->prc_rr->base.params,
@@ -427,13 +414,11 @@ int adecode(
             return 0;
         }
         else{
-            printf("success\n");
         }
 
 
     }
 
-    printf("dma4\n");
 
 
 
@@ -452,7 +437,6 @@ int adecode(
             seed_bytes
         );
 
-        printf("%u\n", bit);
 
 
         if (bit != 0) {
@@ -462,7 +446,6 @@ int adecode(
         }
     }
 
-    printf("dma6\n");
 
 
     /*
@@ -502,7 +485,6 @@ int adecode(
         }
     }
 
-    printf("dma7\n");
 
 
     /*
@@ -524,7 +506,6 @@ int adecode(
     sodium_memzero(seeds, mu * seed_bytes);
     free(seeds);
 
-    printf("dma8\n");
 
 
     return result;

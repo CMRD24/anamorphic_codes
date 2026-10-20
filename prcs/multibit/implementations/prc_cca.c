@@ -27,6 +27,9 @@ struct MBPRC_EncKey {
 
     uint8_t *hash_key;
     MBPRC_EncKey *underlying;
+
+    /* reference count shared with the decoding key (see keygen) */
+    int *refs;
 };
 
 
@@ -37,6 +40,7 @@ struct MBPRC_DecKey {
     uint8_t *hash_key;
     MBPRC_DecKey *underlying_dec;
     MBPRC_EncKey *underlying_enc;
+    int *refs;
 };
 
 
@@ -68,6 +72,27 @@ cca_blocksize(
  * ================================================================
  */
 
+/*
+ * The decoding key keeps a handle on the underlying encoding key. Both keys
+ * share it through a reference count so they can be freed in any order.
+ */
+static void
+release_underlying_enc(
+    const PRC_CCA_Params *params,
+    MBPRC_EncKey *key,
+    int *refs)
+{
+    if (!key)
+        return;
+
+    if (refs && --*refs > 0)
+        return;
+
+    params->prc->free_enc_key(params->prc->params, key);
+    free(refs);
+}
+
+
 static MBPRC_Keys *
 cca_keygen(
     const void *vparams,
@@ -95,7 +120,6 @@ cca_keygen(
     if (!underlying)
         return NULL;
 
-    printf("a1\n");
 
 
 
@@ -166,7 +190,6 @@ cca_keygen(
         return NULL;
     }
 
-    printf("a2\n");
 
 
     /*
@@ -181,6 +204,21 @@ cca_keygen(
     /*
      * Transfer ownership of the underlying keys.
      */
+    int *refs = malloc(sizeof(*refs));
+
+    if (!refs) {
+        free(enc->hash_key);
+        free(dec->hash_key);
+        free(enc);
+        free(dec);
+        mbprc_free_keys(params->prc, underlying);
+        return NULL;
+    }
+
+    *refs = 2;
+    enc->refs = refs;
+    dec->refs = refs;
+
     enc->underlying =
         underlying->enc;
 
@@ -190,7 +228,6 @@ cca_keygen(
     dec->underlying_enc =
         underlying->enc;
 
-    //TODO: should copy enc key, otherwise double free if both keys are freed
 
     underlying->enc = NULL;
     underlying->dec = NULL;
@@ -225,7 +262,6 @@ cca_keygen(
     keys->dec =
         (MBPRC_DecKey *)dec;
 
-    printf("aaaaaaaaaa\n");
 
     return keys;
 }
@@ -404,7 +440,6 @@ cca_encode_ws(
 
 
 
-    printf("ey!\n");
 
 
     uint8_t *ciphertext =
@@ -422,7 +457,6 @@ cca_encode_ws(
             output_bits
         );
 
-    printf("hey!\n");
 
 
     free(encoded_message);
@@ -512,7 +546,6 @@ cca_decode_ws(
         !message_bits_out)
         return 0;
 
-    printf("d1\n");
 
 
     size_t lambda =
@@ -538,7 +571,6 @@ cca_decode_ws(
     if (!decoded)
         return 0;
 
-    printf("d2\n");
 
     size_t decoded_bits = 0;
 
@@ -562,7 +594,6 @@ cca_decode_ws(
         return 0;
     }
 
-    printf("d3\n");
 
     /*
      * Need at least:
@@ -578,7 +609,6 @@ cca_decode_ws(
         return 0;
     }
 
-    printf("d4\n");
 
     if (decoded_bits <
         2 * lambda) {
@@ -587,7 +617,6 @@ cca_decode_ws(
         return 0;
     }
 
-    printf("d5\n");
 
     /*
      * ------------------------------------------------------------
@@ -617,7 +646,6 @@ cca_decode_ws(
         return 0;
     }
 
-    printf("d6\n");
 
     copy_bits(
         rm,
@@ -650,7 +678,6 @@ cca_decode_ws(
         return 0;
     }
 
-    printf("d7\n");
 
     copy_bits(
         r2,
@@ -710,7 +737,6 @@ cca_decode_ws(
     }
 
 
-    printf("d8\n");
 
 
 
@@ -734,7 +760,6 @@ cca_decode_ws(
         return 0;
     }
 
-    printf("d11\n");
 
 
     //reencode the message using pseudo
@@ -762,7 +787,6 @@ cca_decode_ws(
 
     size_t dist = bitwise_hamming_dist(ciphertext, ciphertext_tilde, tmp_bytes);
 
-    printf("distance: %zu\n", dist);
 
     if(dist > params->delta*ciphertext_bits){
         return 0;
@@ -881,14 +905,7 @@ cca_free_enc_key(
     if (!key)
         return;
 
-    if (key->underlying) {
-
-        params->prc->free_enc_key(
-            params->prc->params,
-            (MBPRC_EncKey *)
-                key->underlying
-        );
-    }
+    release_underlying_enc(params, key->underlying, key->refs);
 
     size_t hash_key_bytes =
     bits_to_bytes(params->lambda_bits);
@@ -931,14 +948,7 @@ cca_free_dec_key(
         );
     }
 
-    if (key->underlying_enc) {
-
-        params->prc->free_enc_key(
-            params->prc->params,
-            (MBPRC_EncKey *)
-                key->underlying_enc
-        );
-    }
+    release_underlying_enc(params, key->underlying_enc, key->refs);
 
     size_t hash_key_bytes =
     bits_to_bytes(params->lambda_bits);

@@ -39,6 +39,7 @@ add_library(prc_utils STATIC
     utils/matrix.c
     utils/helpers.c
     utils/csprg_sodium.c
+    utils/ske.c
     main_utils.c
 )
 
@@ -293,3 +294,5 @@ target_link_libraries(rlnc PRIVATE
 # target_link_libraries(main_pp PRIVATE
 #     prc_pp
 # )
+enable_testing()
+add_subdirectory(tests)

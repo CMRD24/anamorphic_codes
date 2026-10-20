@@ -1,5 +1,5 @@
-#ifndef AZERO_BIT_PRC_H
-#define AZERO_BIT_PRC_H
+#ifndef APRC_RR_H
+#define APRC_RR_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -180,4 +180,4 @@ aZBPRC_RR aZBPRC_RR_init(const aZBPRC_RR_Params *aparams);
 aMBPRC_RR aMBPRC_RR_init(const aMBPRC_RR_Params *aparams);
 
 
-#endif /* AZERO_BIT_PRC_H */
+#endif /* APRC_RR_H */

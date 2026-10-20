@@ -153,16 +153,19 @@ high_keygen(
     MBPRC_EncKey *enc_key = NULL;
     MBPRC_DecKey *dec_key = NULL;
     size_t *permutation = NULL;
+    size_t *dec_permutation = NULL;
     MBPRC_Keys *keys = NULL;
 
     enc_key = calloc(1, sizeof(*enc_key));
     dec_key = calloc(1, sizeof(*dec_key));
     permutation = malloc(total_bits * sizeof(*permutation));
+    dec_permutation = malloc(total_bits * sizeof(*dec_permutation));
 
-    if (!enc_key || !dec_key || !permutation)
+    if (!enc_key || !dec_key || !permutation || !dec_permutation)
         goto fail;
 
     random_permutation(random, permutation, total_bits);
+    memcpy(dec_permutation, permutation, total_bits * sizeof(*permutation));
 
 
     keys = calloc(1, sizeof(*keys));
@@ -182,7 +185,8 @@ high_keygen(
     enc_key->permutation = permutation;
     enc_key->permutation_length = total_bits;
 
-    dec_key->permutation = permutation;
+    /* each key owns its own copy so that they can be freed independently */
+    dec_key->permutation = dec_permutation;
     dec_key->permutation_length = total_bits;
 
     keys->enc = enc_key;
@@ -194,6 +198,7 @@ high_keygen(
 
 fail:
     free(permutation);
+    free(dec_permutation);
     free(enc_key);
     free(dec_key);
     free(keys);

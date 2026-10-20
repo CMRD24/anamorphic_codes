@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <sodium.h>
 #include <string.h>
-#include "aprc_rr.h"
+#include "ske.h"
 
 #define PRF_KEYBYTES 32
 

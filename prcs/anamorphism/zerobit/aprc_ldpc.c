@@ -208,7 +208,6 @@ ldpc_aencode(const void *params_ptr,
 {
     (void)aparams_ptr;
 
-    printf("here\n");
     const LDPCParams *params =
         (const LDPCParams *)params_ptr;
 
@@ -218,7 +217,6 @@ ldpc_aencode(const void *params_ptr,
         output_bits == NULL)
         return NULL;
     
-    printf("ae1\n");
 
     size_t k = params->g/2;
     /*
@@ -229,16 +227,14 @@ ldpc_aencode(const void *params_ptr,
 
     random_bitvector(random, &s_prime);
 
-    printf("ae2\n");
 
+    /* s = B s' lives in F_2^g, the column space of G */
     BitVector s =
-        bitvector_alloc(params->n);
+        bitvector_alloc(params->g);
 
-    printf("ae3\n");
 
     packed_g_mul(dk->Subspace, &s_prime, &s);
 
-    printf("ae4\n");
 
     //rest the same as regular encode
 
@@ -407,7 +403,6 @@ ldpc_adecode(const void *params_ptr,
     size_t weight =
         bitvector_weight(&Pc);
 
-    printf("weight %zu\n", weight);
 
     /*
      * Threshold:

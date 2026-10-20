@@ -1,5 +1,5 @@
-#ifndef PRC_SHARP_H
-#define PRC_SHARP_H
+#ifndef PRC_CCA_H
+#define PRC_CCA_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -45,4 +45,4 @@ prc_cca_rr(
     const PRC_CCA_Params *params
 );
 
-#endif /* PRC_SHARP_H */
+#endif /* PRC_CCA_H */

@@ -418,16 +418,6 @@ prc_dc_encode(
         );
 
 
-    //temp: todo remove after testing:
-    printf("Inner bits (%zu):\n", inner_bits);
-
-    for (size_t i = 0; i < inner_bits; ++i) {
-        printf("%u",
-            (inner[i >> 3] >> (i & 7)) & 1u);
-    }
-
-    printf("\n");
-
     if (inner == NULL)
         return NULL;
 
@@ -593,16 +583,6 @@ prc_dc_decode(
         return 0;
     }
 
-    printf("Recovered inner bits (%zu):\n", k);
-
-    for (size_t i = 0; i < k; ++i) {
-        printf("%u",
-            (inner[i >> 3] >> (i & 7)) & 1u);
-    }
-
-    printf("\n");
-
-
     /*
      * Delegate decoding to the underlying PRC.
      */
@@ -611,7 +591,7 @@ prc_dc_decode(
             params->underlying->params,
             key->inner,
             inner,
-            inner_bytes //TODO: *8 ?
+            k
         );
 
     free(inner);

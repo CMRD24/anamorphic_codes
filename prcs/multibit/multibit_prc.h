@@ -200,7 +200,6 @@ mbprc_encode(
     RandomnessSource *random,
     size_t *output_bits)
 {
-    printf("mm1\n");
     return prc->encode(
         prc->params,
         key,
