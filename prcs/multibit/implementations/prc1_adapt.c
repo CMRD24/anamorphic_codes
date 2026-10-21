@@ -406,3 +406,229 @@ prc1_adapt(
             prc1_adapt_free_dec_key
     };
 }
+
+
+/*
+ * ================================================================
+ * Anamorphic mode (anamorphic lifting)
+ * ================================================================
+ *
+ * PRC^1_adapt is a nested PRC with one block (gamma = 1) and J = 2 instances
+ * of the underlying zero-bit PRC: Plan(m) = ((m, 1), -). The block is never
+ * uniform, so the independent instance `sub` of the lifting construction is
+ * only needed by the decoder for the (unused) case x = bottom.
+ *
+ * The anamorphic message space is {1}: the all-bottom message is excluded.
+ */
+
+struct AMBPRC_EncKey {
+    APRC_EncKey *dk[2];
+    ZBPRC_EncKey *sub;
+};
+
+struct AMBPRC_DecKey {
+    APRC_DecKey *tk[2];
+    ZBPRC_DecKey *sub;
+};
+
+static size_t
+aprc1_adapt_amessage_bits(
+    const void *params,
+    const void *aparams)
+{
+    (void)params;
+    (void)aparams;
+
+    return 1;
+}
+
+static void
+aprc1_adapt_free_aenc_key(
+    const void *params,
+    const void *aparams,
+    AMBPRC_EncKey *key)
+{
+    const PRC1AdaptParams *p = params;
+    const APRC1AdaptParams *ap = aparams;
+
+    if (!key)
+        return;
+
+    for (int j = 0; j < 2; ++j) {
+        if (key->dk[j])
+            zbprc_free_enc_akey(p->underlying_prc, ap->underlying_aprc, key->dk[j]);
+    }
+
+    if (key->sub)
+        zbprc_free_enc_key(p->underlying_prc, key->sub);
+
+    free(key);
+}
+
+static void
+aprc1_adapt_free_adec_key(
+    const void *params,
+    const void *aparams,
+    AMBPRC_DecKey *key)
+{
+    const PRC1AdaptParams *p = params;
+    const APRC1AdaptParams *ap = aparams;
+
+    if (!key)
+        return;
+
+    for (int j = 0; j < 2; ++j) {
+        if (key->tk[j])
+            zbprc_free_dec_akey(p->underlying_prc, ap->underlying_aprc, key->tk[j]);
+    }
+
+    if (key->sub)
+        zbprc_free_dec_key(p->underlying_prc, key->sub);
+
+    free(key);
+}
+
+static AMBPRC_Keys *
+aprc1_adapt_akeygen(
+    const void *params,
+    const void *aparams,
+    MBPRC_Keys *reg_keys,
+    RandomnessSource *random)
+{
+    const PRC1AdaptParams *p = params;
+    const APRC1AdaptParams *ap = aparams;
+    AMBPRC_Keys *keys = calloc(1, sizeof(*keys));
+    ZBPRC_Keys *sub = NULL;
+
+    if (!p || !ap || !p->underlying_prc || !ap->underlying_aprc ||
+        !reg_keys || !random || !keys)
+        goto fail;
+
+    keys->enc = calloc(1, sizeof(*keys->enc));
+    keys->dec = calloc(1, sizeof(*keys->dec));
+
+    if (!keys->enc || !keys->dec)
+        goto fail;
+
+    /* independent instance for blocks that are uniform in the regular code */
+    sub = zbprc_keygen(p->underlying_prc, random);
+    if (!sub)
+        goto fail;
+
+    keys->enc->sub = sub->enc;
+    keys->dec->sub = sub->dec;
+    free(sub);
+
+    for (int j = 0; j < 2; ++j) {
+        ZBPRC_Keys regular = {
+            .enc = j ? reg_keys->enc->key1 : reg_keys->enc->key0,
+            .dec = j ? reg_keys->dec->key1 : reg_keys->dec->key0,
+        };
+        APRC_Keys *ak = zbprc_akeygen(p->underlying_prc, ap->underlying_aprc,
+                                      &regular, random);
+
+        if (!ak)
+            goto fail;
+
+        keys->enc->dk[j] = ak->enc;
+        keys->dec->tk[j] = ak->dec;
+        free(ak);
+    }
+
+    return keys;
+
+fail:
+    if (keys) {
+        aprc1_adapt_free_aenc_key(params, aparams, keys->enc);
+        aprc1_adapt_free_adec_key(params, aparams, keys->dec);
+        free(keys);
+    }
+
+    return NULL;
+}
+
+static uint8_t *
+aprc1_adapt_aencode(
+    const void *params,
+    const void *aparams,
+    const MBPRC_EncKey *reg_key,
+    const AMBPRC_EncKey *dkey,
+    const uint8_t *message,
+    size_t message_bits,
+    const uint8_t *amessage,
+    RandomnessSource *random,
+    size_t *output_bits)
+{
+    const PRC1AdaptParams *p = params;
+    const APRC1AdaptParams *ap = aparams;
+
+    if (!p || !ap || !reg_key || !dkey || !message || !amessage ||
+        !random || !output_bits || message_bits != 1)
+        return NULL;
+
+    /* the only valid anamorphic message is 1 */
+    if ((amessage[0] & 1u) == 0)
+        return NULL;
+
+    const int j = message[0] & 1u;
+
+    return zbprc_aencode(
+        p->underlying_prc,
+        ap->underlying_aprc,
+        j ? reg_key->key1 : reg_key->key0,
+        dkey->dk[j],
+        random,
+        output_bits);
+}
+
+static int
+aprc1_adapt_adecode(
+    const void *params,
+    const void *aparams,
+    const MBPRC_DecKey *reg_key,
+    const AMBPRC_DecKey *tkey,
+    const uint8_t *ciphertext,
+    size_t ciphertext_bits,
+    uint8_t *amessage_out)
+{
+    const PRC1AdaptParams *p = params;
+    const APRC1AdaptParams *ap = aparams;
+    int present = 0;
+
+    if (!p || !ap || !reg_key || !tkey || !ciphertext || !amessage_out)
+        return 0;
+
+    for (int j = 0; j < 2 && !present; ++j) {
+        present = zbprc_adecode(
+            p->underlying_prc,
+            ap->underlying_aprc,
+            j ? reg_key->key1 : reg_key->key0,
+            tkey->tk[j],
+            ciphertext,
+            ciphertext_bits) == 1;
+    }
+
+    /* blocks that are uniform in the regular code would be read with `sub` */
+    present = present ||
+        zbprc_decode(p->underlying_prc, tkey->sub, ciphertext, ciphertext_bits) == 1;
+
+    if (present)
+        amessage_out[0] = 1;
+
+    return present;
+}
+
+aMBPRC
+aprc1_adapt(
+    const APRC1AdaptParams *aparams)
+{
+    return (aMBPRC) {
+        .aparams = aparams,
+        .amessage_bits = aprc1_adapt_amessage_bits,
+        .akeygen = aprc1_adapt_akeygen,
+        .aencode = aprc1_adapt_aencode,
+        .adecode = aprc1_adapt_adecode,
+        .free_aenc_key = aprc1_adapt_free_aenc_key,
+        .free_adec_key = aprc1_adapt_free_adec_key,
+    };
+}

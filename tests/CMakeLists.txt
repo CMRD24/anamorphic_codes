@@ -29,3 +29,7 @@ endif()
 # Command line front ends (all demo_<code> programs)
 add_test(NAME demos
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/demo_smoke.sh ${CMAKE_BINARY_DIR})
+
+add_executable(test_lifting test_lifting.c)
+target_link_libraries(test_lifting PRIVATE prc1_adapt_impl prc_low_impl prc_ldpc_impl)
+add_test(NAME lifting COMMAND test_lifting)

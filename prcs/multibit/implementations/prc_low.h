@@ -6,6 +6,8 @@
 
 #include "../multibit_prc.h"
 #include "../../zerobit/zerobit_prc.h"
+#include "../../anamorphism/multibit/a_multibit_prc.h"
+#include "../../anamorphism/zerobit/a_zerobit_prc.h"
 
 
 /*
@@ -41,5 +43,22 @@ MBPRC prc_low(
     const PRCLow_Params *params
 );
 
+
+/*
+ * ================================================================
+ * Anamorphic mode (anamorphic lifting, gamma = ell + 1, J = 1)
+ * ================================================================
+ *
+ * Needs a robust anamorphic zero-bit PRC for the same underlying PRC
+ * (for example aprc_ldpc). The anamorphic message has ell + 1 bits, one per
+ * block; it must not be all zero.
+ */
+typedef struct {
+    const aZBPRC *underlying_aprc;
+} APRCLow_Params;
+
+aMBPRC aprc_low(
+    const APRCLow_Params *aparams
+);
 
 #endif /* PRC_LOW_H */

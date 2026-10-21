@@ -63,6 +63,21 @@ int demo_prc_finish(DemoPrc *p, const DemoKeys *keys)
         }
     }
 
+    if (p->lift != NULL) {
+        if (keys->have_anamorphic && p->mb_keys != NULL) {
+            stream = demo_key_stream(keys->anamorphic, DEMO_DOMAIN_ANAMORPHIC);
+            p->lift_keys = mbprc_akeygen(&p->mb, p->lift, p->mb_keys, &stream);
+            csprg_randomness_free(&stream);
+
+            if (p->lift_keys == NULL) {
+                fprintf(stderr, "anamorphic key generation failed (check the parameters)\n");
+                return -1;
+            }
+        }
+
+        return 0;
+    }
+
     if (!has_rr(p))
         return 0;
 
@@ -112,6 +127,12 @@ void demo_prc_close(void *handle)
 
     if (p == NULL)
         return;
+
+    if (p->lift_keys != NULL) {
+        mbprc_free_aenc_key(&p->mb, p->lift, p->lift_keys->enc);
+        mbprc_free_adec_key(&p->mb, p->lift, p->lift_keys->dec);
+        free(p->lift_keys);
+    }
 
     if (p->akeys != NULL) {
         if (p->zerobit)
@@ -232,10 +253,86 @@ int demo_prc_decode(void *handle, const DemoCiphertext *in)
     return failed ? -1 : 0;
 }
 
+/* anamorphic message of the lifting construction: a string of 0/1 characters */
+static int parse_bits(const char *text, uint8_t *bits, size_t count)
+{
+    size_t n = text != NULL ? strlen(text) : 0;
+
+    if (n > count) {
+        fprintf(stderr, "anamorphic message too long: %zu bits, at most %zu\n", n, count);
+        return -1;
+    }
+
+    memset(bits, 0, (count + 7) / 8);
+
+    for (size_t i = 0; i < n; ++i) {
+        if (text[i] != '0' && text[i] != '1') {
+            fprintf(stderr, "the anamorphic message must be a string of 0 and 1\n");
+            return -1;
+        }
+
+        set_bit(bits, i, (uint8_t)(text[i] == '1'));
+    }
+
+    return 0;
+}
+
+static int lift_aencode(DemoPrc *p, const char *message, const char *amessage,
+                        DemoCiphertext *out)
+{
+    RandomnessSource rng = linux_randomness();
+    const size_t gamma = mbprc_amessage_bits(&p->mb, p->lift);
+    uint8_t *amsg = calloc((gamma + 7) / 8, 1);
+    uint8_t msg[DECODED_MESSAGE_CAPACITY];
+    size_t bits = 0;
+    uint8_t *c = NULL;
+
+    if (amsg != NULL && message_bytes(p) <= sizeof(msg) &&
+        parse_bits(amessage, amsg, gamma) == 0 && parse_message(p, message, msg) == 0)
+        c = mbprc_aencode(&p->mb, p->lift, p->mb_keys->enc, p->lift_keys->enc, msg,
+                          p->message_bits, amsg, &rng, &bits);
+
+    free(amsg);
+
+    if (c == NULL) {
+        fprintf(stderr, "anamorphic encoding failed (the message must contain a 1)\n");
+        return -1;
+    }
+
+    return single_codeword(out, c, bits);
+}
+
+static int lift_adecode(DemoPrc *p, const DemoCiphertext *in)
+{
+    const size_t gamma = mbprc_amessage_bits(&p->mb, p->lift);
+    uint8_t *amsg = calloc((gamma + 7) / 8, 1);
+    int failed = amsg == NULL;
+
+    for (size_t i = 0; !failed && i < in->count; ++i) {
+        if (mbprc_adecode(&p->mb, p->lift, p->mb_keys->dec, p->lift_keys->dec,
+                          in->data[i], in->bits, amsg) == 1) {
+            printf("codeword %zu: anamorphic message ", i);
+            for (size_t b = 0; b < gamma; ++b)
+                putchar('0' + get_bit(amsg, b));
+            putchar('\n');
+        } else {
+            printf("codeword %zu: no anamorphic message\n", i);
+            failed = 1;
+        }
+    }
+
+    free(amsg);
+
+    return failed ? -1 : 0;
+}
+
 int demo_prc_aencode(void *handle, const char *message, const char *amessage,
                      DemoCiphertext *out)
 {
     DemoPrc *p = handle;
+
+    if (p->lift != NULL)
+        return lift_aencode(p, message, amessage, out);
     RandomnessSource rng = linux_randomness();
     const size_t mu = mu_of(p);
     uint8_t *amsg = calloc(p->amessage_bytes, 1);
@@ -299,6 +396,10 @@ done:
 int demo_prc_adecode(void *handle, const DemoCiphertext *in)
 {
     DemoPrc *p = handle;
+
+    if (p->lift != NULL)
+        return lift_adecode(p, in);
+
     uint8_t *amsg = calloc(p->amessage_bytes, 1);
     int ok;
 

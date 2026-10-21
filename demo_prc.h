@@ -10,6 +10,7 @@
 #include "demo_common.h"
 #include "prcs/zerobit/implementations/prc_ldpc.h"
 #include "prcs/anamorphism/aprc_rr.h"
+#include "prcs/anamorphism/multibit/a_multibit_prc.h"
 #include "prcs/multibit/multibit_prc.h"
 #include "prcs/zerobit/zerobit_prc.h"
 
@@ -27,12 +28,17 @@ typedef struct DemoPrc {
     size_t indication_len;       /* z */
     size_t amessage_bytes;       /* a multiple of seed_bits / 8 */
 
+    /* anamorphic lifting (lift != NULL enables it): one bit per block, given as
+     * a string of 0/1 characters */
+    const aMBPRC *lift;
+
     void *storage;               /* code specific structures, released with free() */
 
     /* ---- set up by demo_prc_finish ---- */
     ZBPRC_Keys *zb_keys;
     MBPRC_Keys *mb_keys;
     APRC_RR_Keys *akeys;
+    AMBPRC_Keys *lift_keys;
     aZBPRC_RR_Params zb_ap;
     aMBPRC_RR_Params mb_ap;
     aZBPRC_RR zb_aprc;

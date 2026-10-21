@@ -9,8 +9,8 @@ codewords differ.
 | `demo_ldpc` | LDPC zero-bit PRC | yes | native (second parity-check matrix) |
 | `demo_pp` | permuted puzzle zero-bit PRC | yes | randomness recovery |
 | `demo_dc` | deletion-channel zero-bit PRC (on LDPC) | yes | – |
-| `demo_1a` | `PRC^1_adapt` (one bit) | yes | – |
-| `demo_low` | `PRC_low` (ell bits) | yes | – |
+| `demo_1a` | `PRC^1_adapt` (one bit) | yes | lifting of the LDPC anamorphic mode |
+| `demo_low` | `PRC_low` (ell bits) | yes | lifting of the LDPC anamorphic mode |
 | `demo_high` | `PRC_high` | yes | randomness recovery |
 | `demo_sharp` | `PRC_sharp` | yes | randomness recovery |
 | `demo_cca` | `PRC_cca` | yes | randomness recovery |
@@ -51,7 +51,7 @@ parameters with their defaults.
 |---|---|
 | `setup` | Writes the regular and anamorphic parameters to `DIR/params.txt`. Parameters you do not give keep their current value (initially the default). The parameters are checked by building the code, so invalid values are rejected here. Prints the resulting parameters. |
 | `keygen` | Generates the regular key (PRCs only). |
-| `akeygen` | Generates the anamorphic key (not for `dc`, `1a`, `low`). |
+| `akeygen` | Generates the anamorphic key (not for `dc`). |
 | `export-key` / `import-key` | Copy a key out of / into the state directory. Importing validates the file. |
 | `encode` | Regular encoding. |
 | `aencode` | Anamorphic encoding: hides `AMESSAGE` in a codeword that still carries `MESSAGE`. |
@@ -88,12 +88,18 @@ zeros removed), or as hex if they are not printable.
 | Demo | Regular `MESSAGE` | Anamorphic `AMESSAGE` |
 |---|---|---|
 | `ldpc`, `pp`, `dc` | none (zero-bit: the codeword encodes the bit 1; the argument is ignored) | `ldpc`: none, `adecode` only reports whether an anamorphic message is present. `pp`: `amessage_bytes` bytes |
-| `1a` | `0` or `1` | – |
-| `low` | `ell/8` bytes | – |
+| `1a` | `0` or `1` | the bit string `1` (the only anamorphic message) |
+| `low` | `ell/8` bytes | a bit string of at most `ell+1` characters `0`/`1` (one bit per block, padded with `0`), not all zero |
 | `high` | `message_bits/8` bytes | `amessage_bytes` bytes |
 | `sharp`, `cca` | `message_bits/8` bytes | `amessage_bytes` bytes |
 | `rlnc` | one generation: `generation_size * packet_size` bytes | `(received-1) * (generation_size - a)` bytes with `a = ceil(lambda / log2 q)`; one GF(q) symbol per byte |
 | `wiretap` | any length, padded to a multiple of `K_bytes` | `ana_message_length` bytes |
+
+For `1a` and `low` the anamorphic mode is the anamorphic lifting construction on
+top of the anamorphic LDPC PRC: the ciphertext is a single codeword with `ell+1`
+blocks (one for `1a`), and each block can hide one anamorphic bit, so the
+anamorphic message is a bit string. `adecode` prints it with all `ell+1`
+positions. They use the LDPC parameters of `demo_ldpc` (a large `g`).
 
 For `high`, `sharp`, `cca` the anamorphic message is spread over
 `mu = indication_len + 1 + amessage_bytes / (seed bytes)` regular codewords, so
@@ -116,8 +122,8 @@ a channel.
 |---|---|
 | `ldpc` | `n=1024 r=256 g=512 t=10 eta=0.01` |
 | `dc` | `n=128 r=64 g=32 t=4 eta=0.01 T=211` |
-| `1a` | `n=1024 r=512 g=256 t=10 eta=0.01` |
-| `low` | `n=1024 r=512 g=256 t=10 eta=0.01 ell=40` |
+| `1a` | `n=1024 r=256 g=512 t=10 eta=0.01` |
+| `low` | `n=1024 r=256 g=512 t=10 eta=0.01 ell=40` |
 | `pp` | `n=128 q=2 symbol_bits=1 message_bytes=8 delta=0 ecc=hamming seed_bits=64 indication_len=32 amessage_bytes=16` |
 | `high` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda=64 message_bits=64 indication_len=8 amessage_bytes=16` |
 | `sharp`, `cca` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda_bits=16 message_bits=32 delta=0.05 indication_len=32 amessage_bytes=16` |
@@ -167,4 +173,4 @@ build/demo_cca --dir bob decode  msg.ct   # codeword 0: ping ...
   ciphertexts without an anamorphic message.
 - The PRC demos do not model a channel; to test error correction, flip bits in
   the ciphertext file yourself.
-- Anamorphic modes of `dc`, `1a` and `low` are not implemented.
+- `dc` has no anamorphic mode.

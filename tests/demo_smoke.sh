@@ -81,8 +81,8 @@ check_code() {
 check_code ldpc    1 1 ""            ""               n=1024 r=256 g=512 t=10
 check_code pp      1 1 ""            "anamorphic-text"
 check_code dc      1 0 ""            ""
-check_code 1a      1 0 "1"           ""
-check_code low     1 0 "hello"       ""               ell=40
+check_code 1a      1 1 "1"           "1"
+check_code low     1 1 "hello"       "10110"          ell=40
 check_code high    1 1 "hi-there"    "secret message" message_bits=64
 check_code sharp   1 1 "ping"        "secret message"
 check_code cca     1 1 "ping"        "secret message"
