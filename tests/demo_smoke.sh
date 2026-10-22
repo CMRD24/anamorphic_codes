@@ -69,7 +69,8 @@ check_code() {
         ok "$code decode of an anamorphic ciphertext"
         [ -z "$msg" ] || expect "$msg" "$code: regular message lost in anamorphic ciphertext"
         # regular ciphertexts carry no anamorphic message (not for the wiretap code: no authentication)
-        if [ "$code" != wiretap ]; then
+        # without indication seeds / authentication the decryption accepts every codeword
+        if [ "${ROBUST:-1}" = 1 ]; then
             OUT=$("$BUILD/demo_$code" --dir "$WORK/$code-b" adecode "$WORK/$code.ct" 2>&1); STATUS=$?
             [ "$STATUS" -ne 0 ] || fail "$code: a regular ciphertext was accepted as anamorphic"
         fi
@@ -79,15 +80,20 @@ check_code() {
 }
 
 check_code ldpc    1 1 ""            ""               n=1024 r=256 g=512 t=10
+ROBUST=0
 check_code pp      1 1 ""            "anamorphic-text"
 check_code dc      1 0 ""            ""
 check_code 1a      1 1 "1"           "1"
 check_code low     1 1 "hello"       "10110"          ell=40
-check_code high    1 1 "hi-there"    "secret message" message_bits=64
-check_code sharp   1 1 "ping"        "secret message"
-check_code cca     1 1 "ping"        "secret message"
-check_code rlnc    0 1 "regular text" "hidden text"
+check_code high    1 1 "hi-there"    "hide-me"        message_bits=64
+check_code sharp   1 1 "ping"        "hide-me"
+check_code cca     1 1 "ping"        "hide-me"
 check_code wiretap 0 1 "regular text" "hidden text"
+ROBUST=1
+check_code rlnc    0 1 "regular text" "hidden text"
+
+# with indication seeds (mu > 1) the decoder rejects regular ciphertexts again
+check_code cca     1 1 "ping"        "hide-me"        indication_len=4
 
 # unknown parameters and malformed keys are rejected
 run ldpc setup bogus=1; [ "$STATUS" -ne 0 ] || fail "unknown parameter accepted"

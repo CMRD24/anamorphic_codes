@@ -101,11 +101,23 @@ blocks (one for `1a`), and each block can hide one anamorphic bit, so the
 anamorphic message is a bit string. `adecode` prints it with all `ell+1`
 positions. They use the LDPC parameters of `demo_ldpc` (a large `g`).
 
-For `high`, `sharp`, `cca` the anamorphic message is spread over
-`mu = indication_len + 1 + amessage_bytes / (seed bytes)` regular codewords, so
-an anamorphic ciphertext file has `mu` codewords. `aencode` takes the regular
-messages for them as `m1;m2;...`; the last one is repeated if fewer are given.
-`pp` encodes `mu` zero-bit codewords.
+`pp`, `high`, `sharp`, `cca` (and `demo_wiretap`) use randomness recovery: the
+decoder recovers the seed of the encoding (`message_bytes` bytes for `pp`,
+`lambda/8` or `lambda_bits/8` bytes for the others), and the anamorphic sender
+puts the pseudorandom encryption `nonce || (PRF(key, nonce) xor message)` of the
+anamorphic message there. The ciphertext fills the seed, so the nonce takes the
+bytes the message leaves and must keep at least 8 bytes: with the defaults
+(`amessage_bytes` 16 for a 24 byte seed, 8 for a 16 byte seed) the anamorphic
+ciphertext is a single codeword (`mu = 1`), exactly as long as a regular one.
+A longer message needs more seeds: `mu = indication_len + c`, where `c` is the
+smallest number of seeds that hold nonce and message (`c = 1` as long as
+`amessage_bytes <= seed bytes - 8`). `indication_len` adds that many extra
+codewords whose seeds satisfy `PRF(seed) = 0`; they make `adecode` reject strings
+that are not anamorphic. Without them (the default) the decryption is not
+authenticated, so `adecode` returns some message for every codeword it can
+read, regular ones included. For `high`, `sharp`, `cca` `aencode` takes the
+regular messages of the `mu` codewords as `m1;m2;...`; the last one is repeated
+if fewer are given.
 
 A ciphertext file is text: the line `demo-ciphertext`, a line
 `<count> <bits per codeword>`, and one hex line per codeword (bit `i` is bit
@@ -124,9 +136,9 @@ a channel.
 | `dc` | `n=128 r=64 g=32 t=4 eta=0.01 T=211` |
 | `1a` | `n=1024 r=256 g=512 t=10 eta=0.01` |
 | `low` | `n=1024 r=256 g=512 t=10 eta=0.01 ell=40` |
-| `pp` | `n=128 q=2 symbol_bits=1 message_bytes=8 delta=0 ecc=hamming seed_bits=64 indication_len=32 amessage_bytes=16` |
-| `high` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda=64 message_bits=64 indication_len=8 amessage_bytes=16` |
-| `sharp`, `cca` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda_bits=16 message_bits=32 delta=0.05 indication_len=32 amessage_bytes=16` |
+| `pp` | `n=384 q=2 symbol_bits=1 message_bytes=24 delta=0 ecc=hamming indication_len=0 amessage_bytes=16` |
+| `high` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda=128 message_bits=64 indication_len=0 amessage_bytes=8` |
+| `sharp`, `cca` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda_bits=128 message_bits=32 delta=0.05 indication_len=0 amessage_bytes=8` |
 | `rlnc` | `q=256 packet_size=64 generation_size=16 lambda=64 received=20 sent=40` |
 | `wiretap` | `K_bytes=32 security_parameter=128 ana_message_length=16` |
 
@@ -138,8 +150,10 @@ Notes on the parameters:
 - `ldpc` anamorphism uses `g/2` extra parity checks, so `g` must be large
   enough for the decoding threshold: with a small `g` (for example 100 or 256
   at `n=1024`) anamorphic decoding fails regularly.
-- `amessage_bytes` must be a multiple of the seed length in bytes
-  (`seed_bits/8`, `lambda/8`, `lambda_bits/8`).
+- For `pp` the recovered seed is the ECC input, so `n` must match
+  `message_bytes` (Hamming(7,4) doubles it: `n = 16 * message_bytes` symbols of
+  one bit). `amessage_bytes` is at most the seed length minus 8 bytes for a
+  single codeword (see above).
 - `rlnc` needs `generation_size >= 2a`, `received >= generation_size` and
   `sent >= received`. The defaults give only 64-bit security because the
   generation is small; use `lambda=128` with `q=16 generation_size=64` or
@@ -167,10 +181,12 @@ build/demo_cca --dir bob decode  msg.ct   # codeword 0: ping ...
 
 ## Limitations
 
-- `adecode` of `demo_wiretap` returns output for ciphertexts that contain no
-  anamorphic message: the encryption of the seed is not authenticated, so every
-  ciphertext decodes to something. The PRC-based demos and `demo_rlnc` reject
-  ciphertexts without an anamorphic message.
+- `adecode` of `demo_wiretap`, and of `pp`, `high`, `sharp`, `cca` with the default
+  `indication_len=0`, returns output for ciphertexts that contain no anamorphic
+  message: the encryption of the seed is not authenticated, so every ciphertext
+  decodes to something (set `indication_len` for the PRCs to get rejection).
+  `demo_ldpc`, `demo_1a`, `demo_low` and `demo_rlnc` reject ciphertexts without
+  an anamorphic message.
 - The PRC demos do not model a channel; to test error correction, flip bits in
   the ciphertext file yourself.
 - `dc` has no anamorphic mode.
@@ -211,7 +227,9 @@ Notes:
   is about zero for the randomness-recovery codes, whose anamorphic key is just
   random bytes). `rlnc` and `wiretap` are keyless and only have the anamorphic
   key.
-- The ciphertext of the randomness-recovery codes (`pp`, `high`, `sharp`, `cca`)
-  consists of `mu` codewords, so their anamorphic operations process `mu` times
-  as much data as the regular ones; the ratio mostly reflects `mu`.
+- The randomness-recovery codes (`pp`, `high`, `sharp`, `cca`) use `mu = 1` by
+  default, so an anamorphic ciphertext is as large as a regular one and the
+  overhead is the encryption of the seed. Set `--param CODE:indication_len=N` or
+  a longer `amessage_bytes` to benchmark `mu > 1`; the anamorphic operations
+  then process `mu` times as much data and the ratio mostly reflects `mu`.
 - The codes print their results while decoding; `bench` discards that output.

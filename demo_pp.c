@@ -8,15 +8,14 @@
 #include "utils/none_ecc.h"
 
 static const DemoParamSpec specs[] = {
-    {"n", "128", "codeword length in symbols"},
+    {"n", "384", "codeword length in symbols"},
     {"q", "2", "alphabet size"},
     {"symbol_bits", "1", "bits per symbol"},
-    {"message_bytes", "8", "bytes encoded by the ECC"},
+    {"message_bytes", "24", "bytes encoded by the ECC; the decoder recovers them as the seed"},
     {"delta", "0", "noise parameter"},
     {"ecc", "hamming", "error-correcting code: hamming or none"},
-    {"seed_bits", "64", "bits of the encoding seed recovered by the decoder"},
-    {"indication_len", "32", "number of indication seeds"},
-    {"amessage_bytes", "16", "anamorphic message bytes (multiple of seed_bits/8)"},
+    {"indication_len", "0", "indication seeds (extra codewords that make adecode reject other strings)"},
+    {"amessage_bytes", "16", "anamorphic message bytes; the nonce fills the rest of the seed (>= 8 bytes)"},
     {NULL, NULL, NULL}
 };
 
@@ -60,7 +59,7 @@ static void *pp_open(const DemoParams *params, const DemoKeys *keys)
 
     p->zerobit = 1;
     p->zb_rr = &s->rr;
-    p->seed_bits = demo_param_size(params, "seed_bits");
+    p->seed_bits = 8 * s->params.message_bytes;
     p->indication_len = demo_param_size(params, "indication_len");
     p->amessage_bytes = demo_param_size(params, "amessage_bytes");
 

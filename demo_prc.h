@@ -24,9 +24,10 @@ typedef struct DemoPrc {
     /* randomness-recovery anamorphism (rr != NULL enables it) */
     const ZBPRC_RR *zb_rr;
     const MBPRC_RR *mb_rr;
-    size_t seed_bits;            /* k, a multiple of 8 */
-    size_t indication_len;       /* z */
-    size_t amessage_bytes;       /* a multiple of seed_bits / 8 */
+    size_t seed_bits;            /* k, a multiple of 8: the seed the decoder recovers */
+    size_t indication_len;       /* z indication seeds (0: none, mu = 1 is possible) */
+    size_t amessage_bytes;       /* the nonce takes the rest of the ciphertext seeds,
+                                    at least RR_MIN_NONCE_BYTES */
 
     /* anamorphic lifting (lift != NULL enables it): one bit per block, given as
      * a string of 0/1 characters */

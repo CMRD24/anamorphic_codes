@@ -12,6 +12,7 @@ static RRShape shape_of(const aMBPRC_RR_Params *aparams)
         .seed_len = aparams->seed_len,
         .indication_len = aparams->indication_len,
         .mu = aparams->mu,
+        .message_bytes = aparams->message_bytes,
     };
 }
 

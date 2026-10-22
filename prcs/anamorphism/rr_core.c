@@ -12,14 +12,31 @@ size_t rr_seed_bytes(const RRShape *shape)
     return shape->seed_len / 8;
 }
 
-size_t rr_message_bytes(const RRShape *shape)
+size_t rr_min_ciphertext_seeds(size_t seed_len, size_t message_bytes)
 {
-    if (shape->seed_len == 0 || shape->seed_len % 8 != 0 ||
-        shape->mu <= shape->indication_len + 1)
+    const size_t seed_bytes = seed_len / 8;
+
+    if (seed_bytes == 0)
         return 0;
 
-    /* ciphertext = nonce (one seed) || masked message */
-    return rr_seed_bytes(shape) * (shape->mu - shape->indication_len - 1);
+    return (message_bytes + RR_MIN_NONCE_BYTES + seed_bytes - 1) / seed_bytes;
+}
+
+size_t rr_message_bytes(const RRShape *shape)
+{
+    size_t ciphertext_bytes;
+
+    if (shape->seed_len == 0 || shape->seed_len % 8 != 0 ||
+        shape->mu <= shape->indication_len || shape->message_bytes == 0)
+        return 0;
+
+    ciphertext_bytes = (shape->mu - shape->indication_len) * rr_seed_bytes(shape);
+
+    /* ciphertext = nonce || masked message */
+    if (shape->message_bytes + RR_MIN_NONCE_BYTES > ciphertext_bytes)
+        return 0;
+
+    return shape->message_bytes;
 }
 
 APRC_RR_Keys *rr_akeygen(RandomnessSource *random)
@@ -86,8 +103,10 @@ uint8_t *rr_build_seeds(
         } while (ske_prf_bit(keys->prf_key, seed, seed_bytes) != 0);
     }
 
-    /* r_(z+1) .. r_mu = Enc(encryption_key, m_a) */
-    if (encrypt(keys->encryption_key, seed_bytes, ana_message, message_bytes,
+    /* r_(z+1) .. r_mu = Enc(encryption_key, m_a): the nonce fills the rest */
+    if (encrypt(keys->encryption_key,
+                (shape->mu - shape->indication_len) * seed_bytes - message_bytes,
+                ana_message, message_bytes,
                 seeds + shape->indication_len * seed_bytes) != 0) {
         free(seeds);
         return NULL;
@@ -115,7 +134,8 @@ int rr_open_seeds(
             return -1;
     }
 
-    return decrypt(keys->encryption_key, seed_bytes,
+    return decrypt(keys->encryption_key,
+                   (shape->mu - shape->indication_len) * seed_bytes - message_bytes,
                    seeds + shape->indication_len * seed_bytes,
                    ana_message, message_bytes);
 }

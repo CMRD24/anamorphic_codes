@@ -7,11 +7,11 @@
 
 static const DemoParamSpec specs[] = {
     DEMO_LDPC_SPECS("1024", "512", "256", "11", "0.01"),
-    {"lambda_bits", "16", "security parameter in bits (multiple of 8); seed length"},
+    {"lambda_bits", "128", "security parameter in bits (multiple of 8); length of the recovered seed"},
     {"message_bits", "32", "message length in bits"},
     {"delta", "0.05", "maximal relative distance of the re-encoded codeword"},
-    {"indication_len", "32", "number of indication seeds"},
-    {"amessage_bytes", "16", "anamorphic message bytes (multiple of lambda_bits/8)"},
+    {"indication_len", "0", "indication seeds (extra codewords that make adecode reject other strings)"},
+    {"amessage_bytes", "8", "anamorphic message bytes; the nonce fills the rest of the seed (>= 8 bytes)"},
     {NULL, NULL, NULL}
 };
 

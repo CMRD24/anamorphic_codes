@@ -12,9 +12,10 @@
 
 #define DECODED_MESSAGE_CAPACITY 4096
 
+/* indication seeds plus the fewest seeds that hold nonce and ciphertext */
 static size_t mu_of(const DemoPrc *p)
 {
-    return p->indication_len + 1 + p->amessage_bytes / (p->seed_bits / 8);
+    return p->indication_len + rr_min_ciphertext_seeds(p->seed_bits, p->amessage_bytes);
 }
 
 static int has_rr(const DemoPrc *p)
@@ -81,10 +82,9 @@ int demo_prc_finish(DemoPrc *p, const DemoKeys *keys)
     if (!has_rr(p))
         return 0;
 
-    if (p->seed_bits == 0 || p->seed_bits % 8 != 0 || p->amessage_bytes == 0 ||
-        p->amessage_bytes % (p->seed_bits / 8) != 0) {
-        fprintf(stderr, "amessage_bytes must be a positive multiple of the seed length (%zu bytes)\n",
-                p->seed_bits / 8);
+    if (p->seed_bits == 0 || p->seed_bits % 8 != 0 || p->amessage_bytes == 0) {
+        fprintf(stderr, "invalid anamorphic parameters: the seed length (%zu bits) must be a "
+                "positive multiple of 8 and amessage_bytes positive\n", p->seed_bits);
         return -1;
     }
 
@@ -92,6 +92,7 @@ int demo_prc_finish(DemoPrc *p, const DemoKeys *keys)
         const aZBPRC_RR_Params ap = {.seed_len = p->seed_bits,
                                      .indication_len = p->indication_len,
                                      .mu = mu_of(p),
+                                     .message_bytes = p->amessage_bytes,
                                      .prc_rr = p->zb_rr};
         memcpy(&p->zb_ap, &ap, sizeof(ap));
         p->zb_aprc = aZBPRC_RR_init(&p->zb_ap);
@@ -99,6 +100,7 @@ int demo_prc_finish(DemoPrc *p, const DemoKeys *keys)
         const aMBPRC_RR_Params ap = {.seed_len = p->seed_bits,
                                      .indication_len = p->indication_len,
                                      .mu = mu_of(p),
+                                     .message_bytes = p->amessage_bytes,
                                      .prc_rr = p->mb_rr};
         memcpy(&p->mb_ap, &ap, sizeof(ap));
         p->mb_aprc = aMBPRC_RR_init(&p->mb_ap);

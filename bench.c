@@ -46,9 +46,9 @@ static const BenchCode codes[] = {
     {"pp",      &demo_pp_ops,      "",             "anamorphic-text"},
     {"1a",      &demo_1a_ops,      "1",            "1"},
     {"low",     &demo_low_ops,     "hello",        "10110"},
-    {"high",    &demo_high_ops,    "hi-there",     "secret message"},
-    {"sharp",   &demo_sharp_ops,   "ping",         "secret message"},
-    {"cca",     &demo_cca_ops,     "ping",         "secret message"},
+    {"high",    &demo_high_ops,    "hi-there",     "hide-me"},
+    {"sharp",   &demo_sharp_ops,   "ping",         "hide-me"},
+    {"cca",     &demo_cca_ops,     "ping",         "hide-me"},
     {"rlnc",    &demo_rlnc_ops,    "regular text", "hidden text"},
 #ifndef BENCH_NO_WIRETAP
     {"wiretap", &demo_wiretap_ops, "regular text", "hidden text"},

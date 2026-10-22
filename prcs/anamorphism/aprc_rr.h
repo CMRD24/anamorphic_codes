@@ -18,8 +18,14 @@ typedef struct {
     //number of indication bits
     const size_t indication_len;
 
-    //number of regular messages for one anamorphic message
+    //number of regular codewords (indication seeds + seeds carrying the ciphertext)
     const size_t mu;
+
+    //bytes of the anamorphic message. The ciphertext
+    //nonce || (PRF(nonce) xor message) fills the mu - indication_len ciphertext
+    //seeds, so the nonce has (mu - indication_len) * seed_len / 8 - message_bytes
+    //bytes. mu = 1 is possible if that is at least RR_MIN_NONCE_BYTES.
+    const size_t message_bytes;
 
     //the regular PRC
 
@@ -34,8 +40,14 @@ typedef struct {
     //number of indication bits
     const size_t indication_len;
 
-    //number of regular messages for one anamorphic message
+    //number of regular codewords (indication seeds + seeds carrying the ciphertext)
     const size_t mu;
+
+    //bytes of the anamorphic message. The ciphertext
+    //nonce || (PRF(nonce) xor message) fills the mu - indication_len ciphertext
+    //seeds, so the nonce has (mu - indication_len) * seed_len / 8 - message_bytes
+    //bytes. mu = 1 is possible if that is at least RR_MIN_NONCE_BYTES.
+    const size_t message_bytes;
 
     //the regular PRC
 
