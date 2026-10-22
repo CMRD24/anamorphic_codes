@@ -114,7 +114,8 @@ static int ldpc_adecode(void *handle, const DemoCiphertext *in)
     return failed ? -1 : 0;
 }
 
-static const DemoOps ops = {
+/* exported so that the benchmark can use the code without its main */
+const DemoOps demo_ldpc_ops = {
     .name = "ldpc",
     .params = specs,
     .regular_keys = 1,
@@ -128,7 +129,9 @@ static const DemoOps ops = {
     .adecode = ldpc_adecode,
 };
 
+#ifndef DEMO_NO_MAIN
 int main(int argc, char **argv)
 {
-    return demo_main(&ops, argc, argv);
+    return demo_main(&demo_ldpc_ops, argc, argv);
 }
+#endif

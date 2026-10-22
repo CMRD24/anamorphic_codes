@@ -72,7 +72,8 @@ static void *pp_open(const DemoParams *params, const DemoKeys *keys)
     return p;
 }
 
-static const DemoOps ops = {
+/* exported so that the benchmark can use the code without its main */
+const DemoOps demo_pp_ops = {
     .name = "pp",
     .params = specs,
     .regular_keys = 1,
@@ -86,7 +87,9 @@ static const DemoOps ops = {
     .adecode = demo_prc_adecode,
 };
 
+#ifndef DEMO_NO_MAIN
 int main(int argc, char **argv)
 {
-    return demo_main(&ops, argc, argv);
+    return demo_main(&demo_pp_ops, argc, argv);
 }
+#endif

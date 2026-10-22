@@ -45,6 +45,11 @@ typedef struct {
     char values[DEMO_MAX_PARAMS][64];
 } DemoParams;
 
+/* fills p with the default values of specs */
+void demo_params_defaults(DemoParams *p, const DemoParamSpec *specs);
+/* sets a parameter; -1 (after a message) if the name is unknown or the value too long */
+int demo_params_set(DemoParams *p, const char *name, const char *value);
+
 const char *demo_param(const DemoParams *p, const char *name);
 size_t demo_param_size(const DemoParams *p, const char *name);
 double demo_param_double(const DemoParams *p, const char *name);

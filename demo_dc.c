@@ -44,7 +44,8 @@ static void *dc_open(const DemoParams *params, const DemoKeys *keys)
     return p;
 }
 
-static const DemoOps ops = {
+/* exported so that the benchmark can use the code without its main */
+const DemoOps demo_dc_ops = {
     .name = "dc",
     .params = specs,
     .regular_keys = 1,
@@ -55,7 +56,9 @@ static const DemoOps ops = {
     .decode = demo_prc_decode,
 };
 
+#ifndef DEMO_NO_MAIN
 int main(int argc, char **argv)
 {
-    return demo_main(&ops, argc, argv);
+    return demo_main(&demo_dc_ops, argc, argv);
 }
+#endif

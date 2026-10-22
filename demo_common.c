@@ -27,7 +27,7 @@ static int spec_index(const DemoParamSpec *specs, const char *name)
     return -1;
 }
 
-static void params_defaults(DemoParams *p, const DemoParamSpec *specs)
+void demo_params_defaults(DemoParams *p, const DemoParamSpec *specs)
 {
     memset(p, 0, sizeof(*p));
     p->specs = specs;
@@ -37,7 +37,7 @@ static void params_defaults(DemoParams *p, const DemoParamSpec *specs)
     }
 }
 
-static int params_set(DemoParams *p, const char *name, const char *value)
+int demo_params_set(DemoParams *p, const char *name, const char *value)
 {
     int i = spec_index(p->specs, name);
 
@@ -96,7 +96,7 @@ static int params_load(DemoParams *p, const DemoParamSpec *specs, const char *pa
     char line[256];
     FILE *f;
 
-    params_defaults(p, specs);
+    demo_params_defaults(p, specs);
 
     f = fopen(path, "r");
     if (f == NULL)
@@ -113,7 +113,7 @@ static int params_load(DemoParams *p, const DemoParamSpec *specs, const char *pa
 
         /* parameters unknown to this version are ignored */
         if (spec_index(specs, line) >= 0)
-            params_set(p, line, eq + 1);
+            demo_params_set(p, line, eq + 1);
     }
 
     fclose(f);
@@ -473,7 +473,7 @@ static int cmd_setup(DemoState *st, int argc, char **argv)
         memcpy(name, argv[i], (size_t)(eq - argv[i]));
         name[eq - argv[i]] = '\0';
 
-        if (params_set(&params, name, eq + 1) != 0)
+        if (demo_params_set(&params, name, eq + 1) != 0)
             return -1;
     }
 

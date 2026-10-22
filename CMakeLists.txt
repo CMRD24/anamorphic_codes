@@ -171,6 +171,37 @@ if(OpenSSL_FOUND)
 endif()
 
 
+
+# ============================================================
+# Benchmark: anamorphic versus regular operations
+# ============================================================
+
+set(BENCH_CODES ldpc pp 1a low high sharp cca rlnc)
+if(OpenSSL_FOUND)
+    list(APPEND BENCH_CODES wiretap)
+endif()
+
+# the demo sources again, without their main()
+set(BENCH_SOURCES)
+foreach(code ${BENCH_CODES})
+    list(APPEND BENCH_SOURCES demo_${code}.c)
+endforeach()
+
+add_library(demo_ops OBJECT ${BENCH_SOURCES})
+target_compile_definitions(demo_ops PRIVATE DEMO_NO_MAIN)
+target_include_directories(demo_ops PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(bench bench.c $<TARGET_OBJECTS:demo_ops>)
+target_link_libraries(bench PRIVATE
+    demo_common
+    prc_ldpc_impl prc_pp_impl prc1_adapt_impl prc_low_impl prc_high_impl
+    prc_sharp_impl prc_cca_impl rlnc_impl)
+if(OpenSSL_FOUND)
+    target_link_libraries(bench PRIVATE wiretap_impl)
+else()
+    target_compile_definitions(bench PRIVATE BENCH_NO_WIRETAP)
+endif()
+
 # ============================================================
 # Tests
 # ============================================================

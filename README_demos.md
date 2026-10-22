@@ -174,3 +174,44 @@ build/demo_cca --dir bob decode  msg.ct   # codeword 0: ping ...
 - The PRC demos do not model a channel; to test error correction, flip bits in
   the ciphertext file yourself.
 - `dc` has no anamorphic mode.
+
+## Benchmark
+
+`bench` compares the anamorphic operations with the regular ones for every code
+that has an anamorphic mode (`ldpc`, `pp`, `1a`, `low`, `high`, `sharp`, `cca`,
+`rlnc`, and `wiretap` if OpenSSL is available). It uses the same code
+configurations as the demos.
+
+```sh
+build/bench [--keys K] [--ops N] [--codes LIST] [--param CODE:NAME=VALUE]... [--csv FILE]
+```
+
+| Option | Meaning |
+|---|---|
+| `--keys K` | number of key generations per code, each with a fresh random key (default 3) |
+| `--ops N` | rounds per key (default 10); a round is `encode`, `decode`, `aencode`, `adecode` |
+| `--codes LIST` | comma separated codes, or `all` (default) |
+| `--param CODE:NAME=VALUE` | override a demo parameter for one code, repeatable, e.g. `--param low:ell=16 --param rlnc:lambda=32` |
+| `--csv FILE` | also write the results as CSV |
+
+Per code it reports mean, standard deviation, minimum and number of samples (in
+milliseconds) of key generation, `encode`, `aencode`, `decode`, `adecode`,
+`encode + decode` and `aencode + adecode`, the anamorphic/regular ratio and
+difference, and the size of the regular and anamorphic ciphertexts. Failed
+operations (for example an `adecode` that does not recover the message) are
+counted and shown next to the row.
+
+Notes:
+
+- Every key first runs one untimed warm-up round, so the samples are
+  `K * N` per operation.
+- Key generation is measured through the demo front end: the regular key
+  generation is opening the code with the regular key, the anamorphic one is
+  the additional time when the anamorphic key is present (reported as `+`; it
+  is about zero for the randomness-recovery codes, whose anamorphic key is just
+  random bytes). `rlnc` and `wiretap` are keyless and only have the anamorphic
+  key.
+- The ciphertext of the randomness-recovery codes (`pp`, `high`, `sharp`, `cca`)
+  consists of `mu` codewords, so their anamorphic operations process `mu` times
+  as much data as the regular ones; the ratio mostly reflects `mu`.
+- The codes print their results while decoding; `bench` discards that output.

@@ -286,7 +286,8 @@ static int rlnc_adecode_op(void *handle, const DemoCiphertext *in)
     return rc;
 }
 
-static const DemoOps ops = {
+/* exported so that the benchmark can use the code without its main */
+const DemoOps demo_rlnc_ops = {
     .name = "rlnc",
     .params = specs,
     .regular_keys = 0,
@@ -300,7 +301,9 @@ static const DemoOps ops = {
     .adecode = rlnc_adecode_op,
 };
 
+#ifndef DEMO_NO_MAIN
 int main(int argc, char **argv)
 {
-    return demo_main(&ops, argc, argv);
+    return demo_main(&demo_rlnc_ops, argc, argv);
 }
+#endif
