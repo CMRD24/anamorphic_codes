@@ -35,9 +35,10 @@ static int poly_deg(const gf_elem_t *a)
     return -1;
 }
 
-static void poly_shl1(gf_elem_t *a)
+/* shift left by one bit, on the lowest nw words */
+static void poly_shl1(gf_elem_t *a, unsigned nw)
 {
-    for (int i = GF_WORDS - 1; i > 0; --i)
+    for (unsigned i = nw - 1; i > 0; --i)
         a->w[i] = (a->w[i] << 1) | (a->w[i - 1] >> 63);
     a->w[0] <<= 1;
 }
@@ -92,11 +93,23 @@ int gf_is_zero(const gf_elem_t *a)
     return poly_deg(a) < 0;
 }
 
+/* a ^= b on the lowest nw words (both have zero words above) */
+static void xor_into(gf_elem_t *a, const gf_elem_t *b, unsigned nw)
+{
+    for (unsigned i = 0; i < nw; ++i)
+        a->w[i] ^= b->w[i];
+}
+
 void gf_add(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
 {
-    (void)F;
-    for (int i = 0; i < GF_WORDS; ++i)
+    unsigned i;
+
+    for (i = 0; i < F->nw; ++i)
         r->w[i] = a->w[i] ^ b->w[i];
+
+    /* elements keep all words above the field zero */
+    for (; i < GF_WORDS; ++i)
+        r->w[i] = 0;
 }
 
 int gf_equal(const gf_field_t *F, const gf_elem_t *a, const gf_elem_t *b)
@@ -108,19 +121,33 @@ int gf_equal(const gf_field_t *F, const gf_elem_t *a, const gf_elem_t *b)
 void gf_mul(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
 {
     gf_elem_t res;
-    gf_zero(&res);
+    int top = (int)F->nw - 1;
 
-    for (int i = (int)F->n - 1; i >= 0; --i) {
+    /* leading zero bits of b only shift a zero accumulator */
+    while (top >= 0 && b->w[top] == 0)
+        --top;
+
+    if (top < 0) {
+        gf_zero(r);
+        return;
+    }
+
+    gf_zero(&res);
+    top = top * 64 + 63;
+    while (!bit_get(b, (unsigned)top))
+        --top;
+
+    for (int i = top; i >= 0; --i) {
         const int carry = bit_get(&res, F->n - 1);
 
-        poly_shl1(&res);
+        poly_shl1(&res, F->nw);
         bit_clear(&res, F->n);
 
         if (carry)
-            gf_add(F, &res, &res, &F->f_low);
+            xor_into(&res, &F->f_low, F->nw);
 
         if (bit_get(b, (unsigned)i))
-            gf_add(F, &res, &res, a);
+            xor_into(&res, a, F->nw);
     }
 
     *r = res;
@@ -164,11 +191,8 @@ static int is_irreducible(const gf_field_t *F)
     return 1;
 }
 
-int gf_field_init(gf_field_t *F, unsigned n)
+static int gf_field_search(gf_field_t *F, unsigned n)
 {
-    if (F == NULL || n < 2 || n > GF_MAX_BITS)
-        return -1;
-
     F->n = n;
     F->nw = n / 64 + 1;
 
@@ -197,6 +221,27 @@ int gf_field_init(gf_field_t *F, unsigned n)
             }
 
     return -1;
+}
+
+int gf_field_init(gf_field_t *F, unsigned n)
+{
+    static _Thread_local gf_field_t cached;
+    static _Thread_local int have_cached;
+
+    if (F == NULL || n < 2 || n > GF_MAX_BITS)
+        return -1;
+
+    if (!have_cached || cached.n != n) {
+        if (gf_field_search(&cached, n) != 0) {
+            have_cached = 0;
+            return -1;
+        }
+        have_cached = 1;
+    }
+
+    *F = cached;
+
+    return 0;
 }
 
 uint32_t gf_get_symbol(const gf_elem_t *a, size_t i, unsigned m)
@@ -244,9 +289,11 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
 
     gf_elem_t *M = calloc(k + 1, sizeof(gf_elem_t));
     gf_elem_t *Q = calloc(k, sizeof(gf_elem_t));
+    gf_elem_t *inv_d = calloc(k, sizeof(gf_elem_t));   /* 1 / prod_{j != i} (x_i - x_j) */
+    gf_elem_t *prefix = calloc(k, sizeof(gf_elem_t));
     int rc = -1;
 
-    if (M == NULL || Q == NULL)
+    if (M == NULL || Q == NULL || inv_d == NULL || prefix == NULL)
         goto done;
 
     /* M = prod (X - x_i) (characteristic 2: X + x_i) */
@@ -260,30 +307,74 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
         gf_mul(F, &M[0], &M[0], &xs[i]);
     }
 
-    for (size_t j = 0; j < k; ++j)
-        gf_zero(&coeffs[j]);
-
+    /*
+     * Denominators d_i = M'(x_i) = prod_{j != i} (x_i + x_j). They are inverted
+     * together (Montgomery's trick): one inversion and 3 (k - 1) multiplications
+     * instead of k inversions.
+     */
     for (size_t i = 0; i < k; ++i) {
-        /* Q = M / (X - x_i) by synthetic division */
-        Q[k - 1] = M[k];
-        for (size_t j = k - 1; j > 0; --j) {
-            gf_elem_t t;
-            gf_mul(F, &t, &xs[i], &Q[j]);
-            gf_add(F, &Q[j - 1], &M[j], &t);
-        }
+        gf_elem_t d;
 
-        gf_elem_t d, f, inv;
-        gf_poly_eval(F, &d, Q, k, &xs[i]);
+        d.w[0] = 1;
+        for (unsigned w = 1; w < GF_WORDS; ++w)
+            d.w[w] = 0;
+
+        for (size_t j = 0; j < k; ++j) {
+            gf_elem_t diff;
+
+            if (j == i)
+                continue;
+
+            gf_add(F, &diff, &xs[i], &xs[j]);
+            gf_mul(F, &d, &d, &diff);
+        }
 
         if (gf_is_zero(&d))
             goto done; /* repeated x */
 
-        gf_inv(F, &inv, &d);
-        gf_mul(F, &f, &ys[i], &inv);
+        inv_d[i] = d;
+        if (i == 0)
+            prefix[0] = d;
+        else
+            gf_mul(F, &prefix[i], &prefix[i - 1], &d);
+    }
+
+    {
+        gf_elem_t total;
+
+        gf_inv(F, &total, &prefix[k - 1]);
+
+        for (size_t i = k; i-- > 0;) {
+            gf_elem_t d = inv_d[i];
+
+            if (i == 0)
+                inv_d[0] = total;
+            else
+                gf_mul(F, &inv_d[i], &total, &prefix[i - 1]);
+
+            gf_mul(F, &total, &total, &d);
+        }
+    }
+
+    for (size_t j = 0; j < k; ++j)
+        gf_zero(&coeffs[j]);
+
+    for (size_t i = 0; i < k; ++i) {
+        gf_elem_t f;
+
+        /* Q = M / (X - x_i) by synthetic division */
+        Q[k - 1] = M[k];
+        for (size_t j = k - 1; j > 0; --j) {
+            gf_elem_t t;
+            gf_mul(F, &t, &Q[j], &xs[i]);
+            gf_add(F, &Q[j - 1], &M[j], &t);
+        }
+
+        gf_mul(F, &f, &ys[i], &inv_d[i]);
 
         for (size_t j = 0; j < k; ++j) {
             gf_elem_t t;
-            gf_mul(F, &t, &f, &Q[j]);
+            gf_mul(F, &t, &Q[j], &f);
             gf_add(F, &coeffs[j], &coeffs[j], &t);
         }
     }
@@ -293,5 +384,7 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
 done:
     free(M);
     free(Q);
+    free(inv_d);
+    free(prefix);
     return rc;
 }
