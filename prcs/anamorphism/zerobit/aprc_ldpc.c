@@ -1,4 +1,26 @@
-
+/*
+ * Anamorphic mode of the LDPC zero-bit PRC (prc_ldpc.c): a second set of parity
+ * checks.
+ *
+ * Anamorphic key generation samples a second sparse parity-check matrix P'
+ * (r' x n, t ones per row) as the trapdoor key and computes a basis B of the
+ * kernel of P'G (G is the generator matrix of the regular key). The double key is
+ * B (dimension g - r').
+ *
+ * Anamorphic encoding is the regular encoding with the secret s restricted to
+ * the subspace: c = G (B s') + z + e. Then P' G B s' = 0, so the syndrome
+ *     P'(c + z) = P' G B s' + P' e = P' e
+ * is sparse noise only, and the anamorphic decoder accepts iff its weight is
+ * below (1/2 - r'^(-1/4)) r'. The codeword is still of the form G s + z + e, so
+ * the regular decoder accepts it. For a regular codeword with s uniform,
+ * P' G s is uniform when P'G has full row rank r', so the weight is about r'/2
+ * and it is rejected (anamorphic robustness); the same holds for random strings.
+ *
+ * Security: P'G B hides the subspace B, since given G and P the products P' G are
+ * pseudorandom under a planted-XOR assumption (so a regular observer cannot tell
+ * that s is confined to a subspace); only g - r' vectors lie in the subspace, so
+ * the claim is limited to about g - r' codewords per key (see the thesis).
+ */
 
 #include "a_zerobit_prc.h"
 #include "aprc_ldpc.h"
@@ -67,8 +89,9 @@ void free_dec_akey(const void *params, const void *aparams, APRC_DecKey *key)
 
 
 /*
- * Number r' of anamorphic parity checks P'. The anamorphic subspace
- * ker(P'G) then has dimension g - r'.
+ * Number r' of anamorphic parity checks P'. The anamorphic subspace ker(P'G) then
+ * has dimension g - r' (rank-nullity), which must be positive and large enough
+ * for the number of codewords that are to look regular.
  */
 static size_t
 ldpc_num_anamorphic_checks(const LDPCParams *params)
@@ -77,6 +100,13 @@ ldpc_num_anamorphic_checks(const LDPCParams *params)
 }
 
 
+/*
+ * Anamorphic key generation. Samples P' (r' = g/2 rows) until P'G has full row
+ * rank r' (an r' x g matrix with independent random columns has full rank except
+ * with probability about 2^(r' - g), so a few attempts suffice), then computes a
+ * basis B of ker(P'G) by Gauss-Jordan elimination (kernel_basis). Returns the
+ * double key B and the trapdoor key P'; the regular keys are only read (G).
+ */
 APRC_Keys *
 ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_keys,
             RandomnessSource *random)
@@ -143,7 +173,6 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
 
         sample_sparse_p(random, &P_prime);
 
-        //compute P'G
         PackedG PpG = sparse_p_mul_packed_g(&P_prime, &reg_keys->enc->G);
 
         /*
@@ -203,6 +232,10 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
 }
 
 
+/*
+ * Anamorphic encoding: c = G (B s') + z + e with s' uniform in F_2^(g - r') and
+ * e ~ Ber(n, eta), i.e. a regular encoding whose secret lies in ker(P'G).
+ */
 uint8_t *
 ldpc_aencode(const void *params_ptr,
             const void *aparams_ptr,
@@ -242,7 +275,6 @@ ldpc_aencode(const void *params_ptr,
     packed_g_mul(dk->Subspace, &s_prime, &s);
 
 
-    //rest the same as regular encode
 
     /*
      * e <- Ber(n, eta)
@@ -323,6 +355,10 @@ ldpc_aencode(const void *params_ptr,
 }
 
 
+/*
+ * Anamorphic decoding: accepts iff wgt(P'(c + z)) < (1/2 - r'^(-1/4)) r', where
+ * P'(c + z) = P' e for an anamorphic codeword (see the comment at the top of the file).
+ */
 int
 ldpc_adecode(const void *params_ptr,
     const void *aparams_ptr,

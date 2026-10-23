@@ -1,3 +1,25 @@
+/*
+ * Wiretap code with an anamorphic mode.
+ *
+ * Encoding (blocks of K bytes m_1..m_q, ECC = the error-correcting code):
+ *
+ *     r_0         seed (uniform for a regular encoding)
+ *     s_i = r_(i-1) XOR m_i
+ *     v_i = IFE(s_i)              (IFE = OAEP4, a keyless invertible transform)
+ *     r_i = r_(i-1) XOR v_i
+ *     codeword  = ECC(r_0) || ECC(v_1) || ... || ECC(v_q)
+ *
+ * Every block is protected against channel noise by the ECC. Decoding undoes the
+ * construction: r_0 = ECC^-1(c_0), v_i = ECC^-1(c_i), s_i = IFE^-1(v_i),
+ * m_i = r_(i-1) XOR s_i, r_i = r_(i-1) XOR v_i. The secrecy against an eavesdropper
+ * with a degraded channel is argued in the thesis (Wiretap_IFE).
+ *
+ * Anamorphism (randomness recovery): the seed r_0 is recoverable from the first
+ * block. The anamorphic sender sets r_0 to a pseudorandom encryption of the
+ * anamorphic message (ske.c) instead of a uniform string; the receiver recovers
+ * r_0 and decrypts. See wiretap_aencode.
+ */
+
 
 #include "wiretap.h"
 
@@ -40,10 +62,9 @@ static void xor_bytes(
 }
 
 /*
- * SHAKE-256 round function.
- *
- * Domain separation ensures the four round functions are distinct.
- * Each invocation produces exactly half_len bytes.
+ * Round function of OAEP4: the first half_len bytes of
+ * SHAKE-256(domain[round] || input) (extendable-output function of FIPS 202).
+ * The distinct domain strings make the four round functions independent.
  */
 static int shake_round(
     unsigned round,
@@ -90,14 +111,22 @@ cleanup:
 }
 
 /*
- * OAEP4:
+ * OAEP4: an invertible all-or-nothing style transform on K bytes, a four-round
+ * Feistel network (Luby and Rackoff, "How to construct pseudorandom permutations
+ * from pseudorandom functions", SIAM J. Comput. 17(2), 1988: four rounds with
+ * independent round functions give a strong pseudorandom permutation) with
+ * OAEP-like rounds (Bellare and Rogaway, "Optimal asymmetric encryption padding",
+ * EUROCRYPT 1994). With L || R = input:
  *
- * L1 = L  XOR H1(R)
- * R1 = R  XOR G1(L1)
- * L2 = L1 XOR H2(R1)
- * R2 = R1 XOR G2(L2)
+ *   L1 = L  XOR H1(R)
+ *   R1 = R  XOR G1(L1)
+ *   L2 = L1 XOR H2(R1)
+ *   R2 = R1 XOR G2(L2)
  *
- * output = L2 || R2
+ * output = L2 || R2. Every round is its own inverse given the other half, so the
+ * transform is inverted by undoing the rounds in reverse order. The round
+ * functions are SHAKE-256 (FIPS 202) with a distinct domain-separation prefix
+ * per round.
  */
 int wiretap_oaep4(
     const uint8_t *input,
@@ -277,7 +306,6 @@ int wiretap_config_valid(const wiretap_config_t *cfg)
         return 0;
 
 
-    //TODO: proper validation of security parameter with K and error-correction block length
 
     return 1;
 }

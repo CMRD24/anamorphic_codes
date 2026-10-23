@@ -12,6 +12,9 @@
 #include "random.h"
 
 
+/*
+ * The randomness source failed: a key or codeword built from it would be insecure, so abort.
+ */
 static inline void error(){
     fprintf(stderr,
                 "secure randomness failure.\n");
@@ -21,11 +24,8 @@ static inline void error(){
 }
 
 /*
- * ================================================================
- * Randomness
- * ================================================================
+ * Fills out with len random bytes from the source; aborts if the source fails.
  */
-
  void random_bytes(RandomnessSource *random,
                          uint8_t *out,
                          size_t len)
@@ -39,6 +39,9 @@ static inline void error(){
 }
 
 
+/*
+ * A uniform 64-bit word.
+ */
  uint64_t random_u64(RandomnessSource *random)
 {
     uint64_t x;
@@ -51,6 +54,9 @@ static inline void error(){
 }
 
 
+/*
+ * A uniform bit.
+ */
  uint8_t random_bit(RandomnessSource *random)
 {
     return (uint8_t)(random_u64(random) & 1ULL);
@@ -58,11 +64,8 @@ static inline void error(){
 
 
 /*
- * ================================================================
- * Random bit vector
- * ================================================================
+ * A uniform vector of F_2^bits (random words, padding bits cleared).
  */
-
  void random_bitvector(RandomnessSource *random,
                              BitVector *v)
 {
@@ -88,11 +91,11 @@ static inline void error(){
 
 
 /*
- * ================================================================
- * Bernoulli vector
- * ================================================================
+ * A vector of independent Bernoulli(eta) bits, i.e. each coordinate is 1 with
+ * probability eta (the error vector e <- Ber(n, eta) of the noise models). A uniform
+ * double in [0, 1) is formed from 53 random bits (the precision of a double) and
+ * compared with eta.
  */
-
  void random_bernoulli_vector(
     RandomnessSource *random,
     BitVector *v,
@@ -140,6 +143,12 @@ static inline void error(){
 }
 
 
+/*
+ * A uniform integer in [0, bound) by rejection sampling: x % bound is biased unless x is
+ * uniform on a multiple of bound, so the first 2^64 mod bound values (threshold) are
+ * rejected and the rest reduced (the "debiased modulo" method also used by OpenBSD's
+ * arc4random_uniform). The expected number of draws is below 2.
+ */
 size_t
 random_bounded(
     RandomnessSource *random,
@@ -161,9 +170,10 @@ random_bounded(
 
 
 /*
- * Fisher-Yates permutation.
- *
- * pi[input_position] = output_position.
+ * A uniform random permutation pi of {0, ..., n-1} (pi[input_position] = output_position)
+ * by the Fisher-Yates shuffle in Durstenfeld's form (R. Durstenfeld, CACM 7(7), 1964;
+ * D. E. Knuth, TAOCP vol. 2, section 3.4.2, algorithm P): for i = n-1 down to 1 swap
+ * pi[i] with pi[j], j uniform in [0, i]. Every permutation has probability 1/n!.
  */
 void
 random_permutation(

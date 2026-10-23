@@ -3,8 +3,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Arithmetic in the binary extension field E = GF(2^N).
+ *
+ * E is represented in a polynomial basis: GF(2)[x] / (f), where f is an
+ * irreducible polynomial of degree N over GF(2). An element is a polynomial of
+ * degree < N, stored as a bit vector (bit i = coefficient of x^i). Addition is
+ * the XOR of the vectors, multiplication is polynomial multiplication reduced
+ * modulo f. See D. Hankerson, A. Menezes, S. Vanstone, "Guide to Elliptic Curve
+ * Cryptography", section 2.3 (binary field arithmetic).
+ *
+ * Invariant: all words of an element above the field's words are zero.
+ */
+
 /* -------------------------------------------------------------------------
- * Raw bit-vector polynomial helpers over GF(2) (degree <= GF_MAX_BITS)
+ * Polynomials over GF(2) as bit vectors (any degree <= GF_MAX_BITS); used to
+ * test irreducibility of the field polynomial
  * ------------------------------------------------------------------------- */
 
 static int bit_get(const gf_elem_t *a, unsigned i)
@@ -22,6 +36,9 @@ static void bit_clear(gf_elem_t *a, unsigned i)
     a->w[i / 64] &= ~((uint64_t)1 << (i % 64));
 }
 
+/*
+ * Degree of the polynomial a; -1 for the zero polynomial.
+ */
 static int poly_deg(const gf_elem_t *a)
 {
     for (int i = GF_WORDS - 1; i >= 0; --i) {
@@ -35,7 +52,7 @@ static int poly_deg(const gf_elem_t *a)
     return -1;
 }
 
-/* shift left by one bit, on the lowest nw words */
+/* a *= x (shift of the bit vector by one position) on the lowest nw words */
 static void poly_shl1(gf_elem_t *a, unsigned nw)
 {
     for (unsigned i = nw - 1; i > 0; --i)
@@ -43,6 +60,9 @@ static void poly_shl1(gf_elem_t *a, unsigned nw)
     a->w[0] <<= 1;
 }
 
+/*
+ * a += x^s * b over GF(2): the XOR of b shifted left by s bits (one step of the polynomial long division).
+ */
 /* a ^= b << s */
 static void poly_xor_shifted(gf_elem_t *a, const gf_elem_t *b, unsigned s)
 {
@@ -58,6 +78,10 @@ static void poly_xor_shifted(gf_elem_t *a, const gf_elem_t *b, unsigned s)
     }
 }
 
+/*
+ * a = a mod b over GF(2) by schoolbook long division: while deg a >= deg b, subtract
+ * (= XOR) the shifted divisor x^(deg a - deg b) * b, which cancels the leading term.
+ */
 static void poly_mod(gf_elem_t *a, const gf_elem_t *b)
 {
     const int db = poly_deg(b);
@@ -67,6 +91,10 @@ static void poly_mod(gf_elem_t *a, const gf_elem_t *b)
         poly_xor_shifted(a, b, (unsigned)(da - db));
 }
 
+/*
+ * Degree of gcd(a, b) over GF(2), by the Euclidean algorithm (gcd(a, b) = gcd(b, a mod b)).
+ * The arguments are taken by value because the algorithm overwrites them.
+ */
 static int poly_gcd_degree(gf_elem_t a, gf_elem_t b)
 {
     while (poly_deg(&b) >= 0) {
@@ -80,7 +108,7 @@ static int poly_gcd_degree(gf_elem_t a, gf_elem_t b)
 
 
 /* -------------------------------------------------------------------------
- * Field
+ * Field elements
  * ------------------------------------------------------------------------- */
 
 void gf_zero(gf_elem_t *a)
@@ -88,12 +116,15 @@ void gf_zero(gf_elem_t *a)
     memset(a, 0, sizeof(*a));
 }
 
+/*
+ * a == 0
+ */
 int gf_is_zero(const gf_elem_t *a)
 {
     return poly_deg(a) < 0;
 }
 
-/* a ^= b on the lowest nw words (both have zero words above) */
+/* a += b over GF(2) (XOR) on the lowest nw words */
 static void xor_into(gf_elem_t *a, const gf_elem_t *b, unsigned nw)
 {
     for (unsigned i = 0; i < nw; ++i)
@@ -107,23 +138,36 @@ void gf_add(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem
     for (i = 0; i < F->nw; ++i)
         r->w[i] = a->w[i] ^ b->w[i];
 
-    /* elements keep all words above the field zero */
+    /* keep the invariant that the words above the field are zero */
     for (; i < GF_WORDS; ++i)
         r->w[i] = 0;
 }
 
+/*
+ * a == b. A bytewise comparison is sufficient because the words above the field are always zero.
+ */
 int gf_equal(const gf_field_t *F, const gf_elem_t *a, const gf_elem_t *b)
 {
     (void)F;
     return memcmp(a, b, sizeof(*a)) == 0;
 }
 
+/*
+ * r = a * b in E: polynomial multiplication reduced modulo f.
+ *
+ * Shift-and-add (Horner) multiplication processing b from its most significant bit:
+ *    res <- res * x mod f;  if b_i = 1 then res <- res + a.
+ * Multiplying by x shifts the bit vector by one position; if the shifted-out
+ * coefficient of x^(N-1) was 1, x^N is replaced by f_low (the field polynomial
+ * without its leading term), because x^N = f_low in characteristic 2. Cost O(N)
+ * operations on nw = N/64 + 1 words; r may alias a or b.
+ */
 void gf_mul(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
 {
     gf_elem_t res;
     int top = (int)F->nw - 1;
 
-    /* leading zero bits of b only shift a zero accumulator */
+    /* leading zero bits of b would only shift the zero accumulator */
     while (top >= 0 && b->w[top] == 0)
         --top;
 
@@ -153,12 +197,18 @@ void gf_mul(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem
     *r = res;
 }
 
-/* a^(2^n - 2) */
+/*
+ * r = a^(-1) for a != 0, by Fermat's little theorem in the multiplicative group of E
+ * (of order 2^N - 1): a^(-1) = a^(2^N - 2). The exponent 2^N - 2 = 2 (2^(N-1) - 1) is
+ * reached by the square-and-multiply chain a^(2^(i+1) - 1) = (a^(2^i - 1))^2 * a.
+ * Cost 2N multiplications, so callers that need many inversions use batch
+ * inversion (see gf_poly_interpolate).
+ */
 void gf_inv(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a)
 {
     gf_elem_t acc = *a;
 
-    /* acc = a^(2^(n-1) - 1) */
+    /* after the i-th round acc = a^(2^(i+1) - 1); the loop ends at 2^(n-1) - 1 */
     for (unsigned i = 1; i + 1 < F->n; ++i) {
         gf_mul(F, &acc, &acc, &acc);
         gf_mul(F, &acc, &acc, a);
@@ -167,7 +217,13 @@ void gf_inv(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a)
     gf_mul(F, r, &acc, &acc);
 }
 
-/* x^n + f_low is irreducible over GF(2)? (Ben-Or) */
+/*
+ * Is f = x^N + f_low irreducible over GF(2)? Ben-Or's test (M. Ben-Or, "Probabilistic
+ * algorithms in finite fields", FOCS 1981; see J. von zur Gathen, J. Gerhard, "Modern
+ * Computer Algebra", chapter 14): f of degree N is irreducible iff
+ * gcd(f, x^(2^i) - x) = 1 for all 1 <= i <= N/2, because an irreducible factor of
+ * degree d divides x^(2^d) - x. h is updated by squaring modulo f: h = x^(2^i) mod f.
+ */
 static int is_irreducible(const gf_field_t *F)
 {
     gf_elem_t f = F->f_low;
@@ -191,12 +247,20 @@ static int is_irreducible(const gf_field_t *F)
     return 1;
 }
 
+/*
+ * Finds the field polynomial of degree n. The candidates are tried in a fixed order
+ * (trinomials, then pentanomials, in lexicographic order of the exponents), so that
+ * every party that calls this with the same n obtains the same field. Irreducible
+ * trinomials or pentanomials exist for all degrees that occur in practice
+ * (Hankerson et al., table of irreducible polynomials); the search fails (-1) if
+ * there is none.
+ */
 static int gf_field_search(gf_field_t *F, unsigned n)
 {
     F->n = n;
     F->nw = n / 64 + 1;
 
-    /* trinomials x^n + x^k + 1 */
+    /* trinomials x^n + x^k + 1 first (cheapest to reduce by) */
     for (unsigned k = 1; k < n; ++k) {
         gf_zero(&F->f_low);
         bit_flip(&F->f_low, k);
@@ -206,7 +270,7 @@ static int gf_field_search(gf_field_t *F, unsigned n)
             return 0;
     }
 
-    /* pentanomials x^n + x^c + x^b + x^a + 1 */
+    /* then pentanomials x^n + x^c + x^b + x^a + 1 */
     for (unsigned c = 3; c < n; ++c)
         for (unsigned b = 2; b < c; ++b)
             for (unsigned a = 1; a < b; ++a) {
@@ -223,6 +287,11 @@ static int gf_field_search(gf_field_t *F, unsigned n)
     return -1;
 }
 
+/*
+ * Sets up GF(2^n), 2 <= n <= GF_MAX_BITS. The search for the polynomial costs far more
+ * than the arithmetic in the field (about 1 ms at n = 64, 30 ms at n = 256), so the
+ * result of the last call is cached per thread.
+ */
 int gf_field_init(gf_field_t *F, unsigned n)
 {
     static _Thread_local gf_field_t cached;
@@ -244,6 +313,10 @@ int gf_field_init(gf_field_t *F, unsigned n)
     return 0;
 }
 
+/*
+ * Symbol i of the element, read as a vector of GF(2^m) symbols: bits [i*m, (i+1)*m).
+ * Addition is componentwise on these symbols, so E is identified with F_q^(N/m).
+ */
 uint32_t gf_get_symbol(const gf_elem_t *a, size_t i, unsigned m)
 {
     uint32_t v = 0;
@@ -252,6 +325,9 @@ uint32_t gf_get_symbol(const gf_elem_t *a, size_t i, unsigned m)
     return v;
 }
 
+/*
+ * Writes symbol i (bits [i*m, (i+1)*m)) of the element.
+ */
 void gf_set_symbol(gf_elem_t *a, size_t i, unsigned m, uint32_t v)
 {
     for (unsigned j = 0; j < m; ++j) {
@@ -267,6 +343,10 @@ void gf_set_symbol(gf_elem_t *a, size_t i, unsigned m, uint32_t v)
  * Polynomials over E
  * ------------------------------------------------------------------------- */
 
+/*
+ * r = P(x) for P = sum_{i<k} coeffs[i] X^i, by Horner's rule
+ * P(x) = (...((c_{k-1} x + c_{k-2}) x + c_{k-3}) ...) x + c_0: k-1 multiplications.
+ */
 void gf_poly_eval(const gf_field_t *F, gf_elem_t *r,
                   const gf_elem_t *coeffs, size_t k, const gf_elem_t *x)
 {
@@ -281,6 +361,22 @@ void gf_poly_eval(const gf_field_t *F, gf_elem_t *r,
     *r = acc;
 }
 
+/*
+ * Coefficients of the unique polynomial P of degree < k with P(xs[i]) = ys[i], for
+ * pairwise distinct xs (-1 if two coincide).
+ *
+ * Lagrange interpolation (e.g. von zur Gathen, Gerhard, "Modern Computer Algebra",
+ * chapter 5):
+ *    P(X) = sum_i  y_i * L_i(X),   L_i(X) = prod_{j != i} (X - x_j) / (x_i - x_j).
+ * With the master polynomial M(X) = prod_j (X - x_j) the numerator is the quotient
+ * Q_i = M / (X - x_i) (synthetic division, i.e. Horner / Ruffini, O(k)), and the
+ * denominator is d_i = prod_{j != i} (x_i - x_j) = M'(x_i). All k inverses of the d_i
+ * are obtained with one inversion by Montgomery's trick (P. L. Montgomery, "Speeding
+ * the Pollard and elliptic curve methods of factorization", Math. Comp. 44, 1985):
+ * invert the prefix product d_0 ... d_{k-1} once and recover 1/d_i from it going
+ * backwards. Total cost O(k^2) multiplications and one inversion; in characteristic 2
+ * subtraction is addition.
+ */
 int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
                         const gf_elem_t *xs, const gf_elem_t *ys, size_t k)
 {

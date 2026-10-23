@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-//#include "../../utils/random.h"
 #include "../zerobit/zerobit_prc_rr.h"
 #include "../multibit/multibit_prc_rr.h"
 

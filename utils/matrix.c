@@ -1,3 +1,19 @@
+/*
+ * Linear algebra over F_2 for the LDPC based PRCs.
+ *
+ * Representations (bit i of a vector is bit i mod 64 of word i / 64):
+ *   BitVector    a vector in F_2^bits.
+ *   PackedMatrix a dense r x c matrix, stored row by row.
+ *   PackedG      an n x g matrix stored column by column (g vectors of F_2^n):
+ *                this is the generator matrix G of the LDPC PRC, whose columns
+ *                are a basis of a subspace of ker P.
+ *   SparseP      an r x n matrix with exactly t ones per row, stored as the
+ *                column indices of the ones: the sparse parity-check matrix P.
+ *
+ * Addition in F_2 is XOR and multiplication is AND, so sums of vectors and rows
+ * are XORs of whole words.
+ */
+
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +34,10 @@ static size_t words_for_bits(size_t bits)
 }
 
 
+/*
+ * Allocates the position array of an r x n matrix with t ones per row (uninitialised;
+ * fill it with sample_sparse_p). Exits on allocation failure.
+ */
  SparseP sparse_p_alloc(size_t r,
                               size_t n,
                               size_t t)
@@ -58,6 +78,9 @@ static size_t words_for_bits(size_t bits)
 }
 
 
+/*
+ * Allocates the zero vector of F_2^bits.
+ */
  BitVector bitvector_alloc(size_t bits)
 {
     BitVector v;
@@ -75,6 +98,9 @@ static size_t words_for_bits(size_t bits)
     return v;
 }
 
+/*
+ * Allocates the zero matrix in F_2^(rows x cols), stored row by row.
+ */
  PackedMatrix packed_matrix_alloc(size_t rows,
                                          size_t cols)
 {
@@ -155,6 +181,9 @@ static inline void packed_matrix_set(
 }
 
 
+/*
+ * dst += src over F_2 (row addition of the elimination).
+ */
 static inline void packed_row_xor(
     uint64_t *dst,
     const uint64_t *src,
@@ -169,6 +198,9 @@ static inline void packed_row_xor(
 }
 
 
+/*
+ * Expands the sparse matrix P to its dense r x n form.
+ */
  PackedMatrix sparse_p_to_packed(
     const SparseP *P)
 {
@@ -244,6 +276,10 @@ void bitvector_zero(BitVector *v)
 }
 
 
+/*
+ * Hamming weight wgt(v): the number of ones, computed as the sum of the population
+ * counts of the words (the padding bits above `bits` are ignored).
+ */
 size_t bitvector_weight(const BitVector *v)
 {
     size_t result = 0;
@@ -257,9 +293,7 @@ size_t bitvector_weight(const BitVector *v)
                 v->data[i]);
     }
 
-    /*
-     * Remove padding bits from the final word.
-     */
+    /* the unused high bits of the last word may be set by other code: not counted */
     if (v->bits & 63) {
 
         size_t valid =
@@ -281,11 +315,9 @@ size_t bitvector_weight(const BitVector *v)
 
 
 /*
- * ================================================================
- * Sparse P × vector
- * ================================================================
+ * y = P x over F_2 for a sparse P: y_i is the parity (XOR) of the t bits of x selected
+ * by row i of P. Cost O(r t) instead of O(r n).
  */
-
  void sparse_p_mul(const SparseP *P,
                          const BitVector *x,
                          BitVector *y)
@@ -318,13 +350,11 @@ size_t bitvector_weight(const BitVector *v)
 }
 
 
+
 /*
- * ================================================================
- * Packed matrix
- * ================================================================
+ * Returns the dense n x (g + g') matrix [G | G'] whose columns are the columns of G
+ * followed by those of G'. Used to test whether G and G' span independent subspaces.
  */
-
-
  PackedMatrix
 concat_g_matrices(
     const PackedG *G,
@@ -392,6 +422,19 @@ concat_g_matrices(
 }
 
 
+/*
+ * Basis of the kernel (null space) ker A = { x in F_2^cols : A x = 0 }.
+ *
+ * Algorithm: Gauss-Jordan elimination brings A to reduced row echelon form (see e.g.
+ * H. Cohen, "A Course in Computational Algebraic Number Theory", Alg. 2.3.1, kernel
+ * of a matrix). If the pivot columns are p_1..p_rank, row k reads
+ * x_{p_k} + sum_{f free} A[k][f] x_f = 0. Hence for each free column f the vector
+ * that has a 1 in f, a 1 in every pivot column p_k with A[k][f] = 1, and zeros
+ * elsewhere lies in ker A, and these vectors are a basis. By the rank-nullity
+ * theorem the dimension is cols - rank.
+ *
+ * NOTE: A is overwritten (it is reduced in place). Cost O(rank * rows * cols / 64) word operations.
+ */
  KernelBasis kernel_basis(const PackedMatrix *A)
 {
 
@@ -411,7 +454,9 @@ concat_g_matrices(
     size_t rank = 0;
 
     /*
-     * Gauss-Jordan elimination over F_2.
+     * Forward and backward elimination in one pass (Gauss-Jordan): for every
+     * column find a pivot row at or below `rank`, move it up, and clear the column
+     * in all other rows. Row additions are XORs of whole 64-bit words.
      */
     for (size_t col = 0;
          col < A->cols && rank < A->rows;
@@ -568,12 +613,14 @@ concat_g_matrices(
     free(is_pivot);
     free(pivot_column);
 
-    //packed_matrix_free(A);
 
     return K;
 }
 
 
+/*
+ * Allocates the zero n x g matrix as g column vectors of F_2^n.
+ */
  PackedG packed_g_alloc(size_t n,
                               size_t g)
 {
@@ -627,6 +674,9 @@ concat_g_matrices(
     G->g = 0;
 }
 
+/*
+ * Turns a kernel basis (vectors of F_2^n) into the columns of an n x dim matrix.
+ */
  PackedG
 kernel_basis_to_packed_g(
     const KernelBasis *K,
@@ -659,9 +709,7 @@ kernel_basis_to_packed_g(
             words * sizeof(uint64_t)
         );
 
-        /*
-         * Clear unused bits in the last word.
-         */
+        /* bits above n in the last word must be zero */
         if (n % 64 != 0) {
             G.columns[j].data[words - 1] &=
                 ((UINT64_C(1) << (n % 64)) - 1);
@@ -672,6 +720,10 @@ kernel_basis_to_packed_g(
 }
 
 
+/*
+ * result = G s over F_2: the XOR of the columns j of G with s_j = 1 (a linear
+ * combination of the columns, cost O(g n / 64)).
+ */
  void packed_g_mul(
     const PackedG *G,
     const BitVector *s,
@@ -697,6 +749,9 @@ kernel_basis_to_packed_g(
 }
 
 
+/*
+ * Converts the column-wise matrix G to the row-wise dense form (a transposition of the storage).
+ */
  PackedMatrix
 packed_g_to_matrix(const PackedG *G)
 {
@@ -727,6 +782,9 @@ packed_g_to_matrix(const PackedG *G)
     return M;
 }
 
+/*
+ * Returns the r x g matrix P G, computed column by column: (P G)[:, j] = P G[:, j].
+ */
 PackedG
 sparse_p_mul_packed_g(
     const SparseP *P,

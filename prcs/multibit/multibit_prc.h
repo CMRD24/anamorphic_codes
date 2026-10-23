@@ -13,19 +13,6 @@
  * Randomness
  * ================================================================
  */
-
-// typedef int (*MBPRC_Rng)(
-//     void *ctx,
-//     uint8_t *out,
-//     size_t len
-// );
-
-// typedef struct {
-//     MBPRC_Rng rng;
-//     void *ctx;
-// } MBPRC_Random;
-
-
 /*
  * ================================================================
  * Opaque key types

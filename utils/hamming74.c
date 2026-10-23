@@ -1,7 +1,15 @@
 #include "ecc.h"
 
 /*
- * Hamming(7,4)
+ * Hamming(7,4) code (R. W. Hamming, "Error detecting and error correcting codes",
+ * Bell System Technical Journal 29(2), 1950).
+ *
+ * A linear [7,4,3] code over F_2: 4 data bits d are extended by 3 parity bits so
+ * that the codeword c satisfies H c = 0 for the parity-check matrix H whose column
+ * i is the binary representation of the position i = 1..7. The minimum distance is
+ * 3, so one bit error per codeword is corrected: after a single flip at position i
+ * the syndrome H c equals the column i, i.e. the syndrome is the error position.
+ * Two errors in one codeword are miscorrected.
  *
  * Each byte is split into two 4-bit nibbles.
  * Each nibble is encoded into a 7-bit Hamming codeword.

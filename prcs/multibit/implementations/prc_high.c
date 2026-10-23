@@ -1,3 +1,20 @@
+/*
+ * PRC_high: a PRC for longer messages of message_bits bits (the construction of
+ * Christ and Gunn, "Pseudorandom Error-Correcting Codes", CRYPTO 2024, that
+ * encodes the message with an ordinary error-correcting code and hides it
+ * with a pseudorandom pad).
+ *
+ * Encode(m): sample a seed r of lambda bits; encode r with the inner PRC (PRC_low);
+ * output the concatenation encoded_seed || (ECC(m) XOR PRG(r)) with a secret
+ * permutation of all bit positions. PRG is a pseudorandom generator (here the
+ * counter-mode hash generator of csprg_sodium.c). The pad PRG(r) makes the second
+ * part look uniform, the inner PRC makes the first part look uniform.
+ *
+ * Decode: undo the permutation, decode r from the inner PRC, recompute PRG(r),
+ * unmask the second part and decode the ECC. The error-correction of the message
+ * is that of ECC; the seed r is the value the anamorphic mode controls.
+ */
+
 #include "prc_high.h"
 
 #include <stdlib.h>
@@ -281,7 +298,6 @@ high_encode_ws(
         return NULL;
     }
 
-    //save_codeword("test-enc.txt", encoded_seed, low_output_bits);
 
     free(low_codeword);
 
@@ -332,7 +348,6 @@ high_encode_ws(
     }
 
 
-    //const CSPRG *csprg = csprg_sodium();
     RandomnessSource rand = csprg_randomness(seed, seed_len);
 
 
@@ -644,7 +659,6 @@ high_decode_ws(
     free(y);
 
 
-    //save_codeword("test-dec.txt", encoded_seed, low_bits);
     /*
      * ------------------------------------------------------------
      * 3. Decode seed using low PRC
@@ -796,7 +810,7 @@ high_decode_ws(
 
     int decoded = high_decode_ws(params_ptr, key_ptr, ciphertext, ciphertext_bits, message_out, message_bits_out, seed);
 
-    //seed not further used in regular mode
+    /* regular decoding ignores the recovered seed */
     free(seed);
 
     return decoded;

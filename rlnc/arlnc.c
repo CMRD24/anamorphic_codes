@@ -1,10 +1,21 @@
 /*
  * Anamorphic RLNC (aRLNC): Reed-Solomon points hidden in the headers.
  *
- * A header gamma = (alpha, y) in F_q^a x F_q^{K-a} consists of a uniform label
- * alpha and y = P_{m_a}(pad0(alpha)) + PRF(s, alpha), where P_{m_a} is the
- * polynomial over E = GF(q^{K-a}) whose S-1 coefficients are the anamorphic
- * message. The payload is gamma^T W as in regular RLNC.
+ * A symbol's header gamma in F_q^K is split as gamma = (alpha, y) with a label
+ * alpha in F_q^a (uniform) and y in E = GF(q^(K-a)) (identified with F_q^(K-a),
+ * see gf_ext.c). The anamorphic message m_a = (mu_0, ..., mu_{S-2}) in E^(S-1) is
+ * the coefficient vector of a polynomial P of degree <= S-2 over E (a
+ * Reed-Solomon codeword: the evaluations of P at distinct points), and
+ *
+ *     y = P(pad0(alpha)) + PRF(s, alpha),
+ *
+ * where pad0 embeds the label into E. Without the PRF key s the mask makes y
+ * uniform, so the header is a uniform vector as in regular RLNC. The payload is
+ * u = gamma^T W, so the regular message is unaffected.
+ *
+ * The receiver removes the masks and obtains S points (pad0(alpha_i), P(...)) of
+ * P. Any S-1 distinct points determine P (Lagrange interpolation, gf_ext.c); the
+ * last point is a check that rejects headers that do not come from aRLNC.
  */
 #include "rlnc.h"
 #include "gf_ext.h"
@@ -21,6 +32,9 @@ typedef struct {
     size_t d;        /* K - a: extension degree of E over F_q */
 } arlnc_params_t;
 
+/*
+ * log2 q: the number of bits of a GF(q) symbol (q is a power of two).
+ */
 static unsigned symbol_bits(uint32_t q)
 {
     unsigned m = 0;
@@ -29,6 +43,11 @@ static unsigned symbol_bits(uint32_t q)
     return m;
 }
 
+/*
+ * Derives the parameters of the construction: label length a = ceil(lambda / log2 q)
+ * (so that q^a >= 2^lambda labels), the extension degree d = K - a of E over F_q and
+ * the field E = GF(2^(m d)). Requires K >= 2a and S >= K.
+ */
 static int params_init(const rlnc_config_t *cfg,
                        const rlnc_aconfig_t *acfg,
                        arlnc_params_t *p)
@@ -51,6 +70,9 @@ static int params_init(const rlnc_config_t *cfg,
     return gf_field_init(&p->F, (unsigned)(p->m * p->d));
 }
 
+/*
+ * Length of the anamorphic message in GF(q) symbols: (S - 1) coefficients of d symbols each; 0 if the parameters are invalid.
+ */
 size_t rlnc_amsg_len(const rlnc_config_t *cfg, const rlnc_aconfig_t *acfg)
 {
     arlnc_params_t p;
@@ -83,6 +105,11 @@ void rlnc_akey_free(uint8_t *akey)
     free(akey);
 }
 
+/*
+ * F(s, alpha) in E: a keyed hash (BLAKE2b, libsodium crypto_generichash) of the label and
+ * a block counter, used as a PRF. Its output is expanded in counter mode to d symbols
+ * of GF(q) (one byte each, reduced to log2 q bits).
+ */
 /* F(s, alpha) in E, a keyed hash in counter mode */
 static void prf_mask(const arlnc_params_t *p,
                      const rlnc_config_t *cfg,
@@ -113,6 +140,9 @@ static void prf_mask(const arlnc_params_t *p,
     }
 }
 
+/*
+ * pad0(alpha): the label as an element of E (its a symbols followed by zeros).
+ */
 static void pad0(const arlnc_params_t *p, const uint8_t *alpha, gf_elem_t *out)
 {
     gf_zero(out);
@@ -121,6 +151,13 @@ static void pad0(const arlnc_params_t *p, const uint8_t *alpha, gf_elem_t *out)
         gf_set_symbol(out, i, p->m, alpha[i]);
 }
 
+/*
+ * Creates out_count >= S symbols for the generation `source`, hiding amessage:
+ * for each symbol sample a fresh label alpha (resampled if it repeats, so all labels
+ * are distinct), set y = P(pad0(alpha)) + F(s, alpha) with P from the coefficients of
+ * amessage (Horner evaluation in E), and combine the source packets with
+ * gamma = (alpha, y) as local vector. Returns 0, or -1 on invalid parameters.
+ */
 int rlnc_aencode(
     const rlnc_config_t *cfg,
     const rlnc_aconfig_t *acfg,
@@ -208,6 +245,13 @@ done:
     return rc;
 }
 
+/*
+ * Recovers the anamorphic message from exactly S received symbols (-1 otherwise):
+ * unmask z_i = y_i - F(s, alpha_i), interpolate P through the first S-1 points
+ * (pad0(alpha_i), z_i), and accept iff the last point lies on P. A symbol set that
+ * does not come from aRLNC under this key passes the check with probability 1/|E|.
+ * Symbols with a repeated label are rejected.
+ */
 int rlnc_adecode(
     const rlnc_config_t *cfg,
     const rlnc_aconfig_t *acfg,

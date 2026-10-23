@@ -1,3 +1,14 @@
+/*
+ * PRC^1_adapt: a one-bit PRC from two independent keys of a zero-bit PRC (the
+ * adaptive one-bit construction of Christ and Gunn, "Pseudorandom
+ * Error-Correcting Codes", CRYPTO 2024).
+ *
+ * Encode(b): encode 1 with the key number b. Decode: run the zero-bit decoder with
+ * both keys; exactly one must accept and its index is the bit. Each key alone
+ * sees a pseudorandom word, and a word accepted under no key or both keys is
+ * rejected.
+ */
+
 #include "prc1_adapt.h"
 
 #include <stdlib.h>

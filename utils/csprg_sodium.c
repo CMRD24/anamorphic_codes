@@ -1,3 +1,17 @@
+/*
+ * Deterministic pseudorandom generator from a seed ("counter mode" hash DRBG).
+ *
+ * Output block t (64 bytes) is BLAKE2b-512(domain || bits(seed) || seed || t) with a
+ * 64-bit counter t = 0, 1, 2, ... Under the assumption that BLAKE2b behaves as a
+ * random oracle (or that its keyed/prefixed use is a PRF) the stream is
+ * indistinguishable from random to anyone who does not know the seed. It is used
+ * to derive reproducible keys and the pseudorandom coins of the PRC constructions
+ * from a short seed; it is not a NIST SP 800-90A generator.
+ *
+ * A request that does not end on a block boundary discards the rest of the block,
+ * so the stream depends on the sequence of request sizes.
+ */
+
 #include <sodium.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -14,11 +28,7 @@ typedef struct {
 } SecurePseudorandomCtx;
 
 
-/*
- * Generate one deterministic block from:
- *
- *     seed || counter
- */
+/* Block number `counter` of the stream (see the comment at the top of the file). */
 static int
 generate_block(
     const uint8_t *seed,

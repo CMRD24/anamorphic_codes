@@ -6,12 +6,6 @@
 #include <limits.h>
 #include <stdio.h>
 
-/*
- * ================================================================
- * Helpers
- * ================================================================
- */
-
 size_t
 bits_to_bytes(
     size_t bits)
@@ -20,10 +14,10 @@ bits_to_bytes(
 }
 
 /*
- * Copy arbitrary packed bits.
- *
- * Bit numbering is LSB-first inside each byte, consistent with
- * the rest of the PRC code.
+ * Copies `bits` bits from src (starting at bit src_bit) to dst (starting at bit dst_bit),
+ * bit by bit, so neither position needs to be byte aligned. Bit i of a byte array is
+ * bit (i mod 8) of byte i / 8 (least significant bit first); bits outside the range
+ * are left unchanged.
  */
 void copy_bits(
     uint8_t *dst,
@@ -60,7 +54,9 @@ void copy_bits(
 }
 
 /*
- * Constant-time comparison.
+ * a == b for len bytes in time independent of the contents: the XOR of all byte pairs is
+ * accumulated without an early exit, so a timing observer learns nothing about where
+ * the arrays differ (used when comparing values derived from secrets).
  */
 int constant_time_equal(
     const uint8_t *a,
@@ -75,6 +71,9 @@ int constant_time_equal(
     return diff == 0;
 }
 
+/*
+ * Hamming distance of two byte arrays: the number of differing bits (population count of the XOR).
+ */
 size_t bitwise_hamming_dist(const uint8_t *a,
                             const uint8_t *b,
                             size_t len)

@@ -1,3 +1,29 @@
+/*
+ * Zero-bit PRC from a "permuted puzzle" over a q-ary alphabet (the
+ * error-correcting-code based construction of Christ and Gunn, "Pseudorandom
+ * Error-Correcting Codes", CRYPTO 2024).
+ *
+ * Let C be an error-correcting code with a worst-case decoder, encoding x in F_q^k
+ * to a word of F_q^n.
+ *
+ * Key: a random permutation sigma of the positions (sigma(i) is the position of
+ * the source symbol used at output position i), permutations pi_i of F_q for
+ * every position i, and a one-time pad o in F_q^n.
+ *
+ * Encode: x uniform, c = C(x); hat_c_i = pi_i(c_sigma(i)) (permute and relabel
+ * symbols); pass hat_c through the q-ary substitution channel with probability
+ * delta/2 (each symbol replaced by a different uniform one); output
+ * hat_c + o. Without the key the output is uniform because of the pad.
+ *
+ * Decode: subtract o, undo pi_i and sigma to obtain a noisy word of C, decode it
+ * with the decoder of C, re-encode and compare with the received word: accept iff
+ * the Hamming distance is at most delta n. A random word is far from every
+ * codeword when C has a sparse enough set of codewords.
+ *
+ * The message x is the seed recovered by the decoder; the anamorphic randomness
+ * recovery mode chooses it freely (encode_ws).
+ */
+
 #include "prc_pp.h"
 
 #include <stdlib.h>
@@ -1121,7 +1147,7 @@ zbprc_pp_decode(
 
         int decoded = zbprc_pp_decode_ws(vparams, key, ciphertext, ciphertext_bits, seed);
 
-        //regular mode doesn't use seed
+        /* regular decoding ignores the recovered message x */
         free(seed);
 
         return decoded;

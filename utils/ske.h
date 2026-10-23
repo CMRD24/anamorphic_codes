@@ -10,9 +10,9 @@
  * Ciphertext layout:
  *   nonce || (PRF(key, nonce) XOR message)
  *
- * The ciphertext buffer must have at least
- * nonce_len + message_len bytes. The key is a libsodium generichash key
- * (crypto_generichash_KEYBYTES bytes).
+ * The ciphertext buffer must have at least nonce_len + message_len bytes, with
+ * message_len <= 64 (the output length of BLAKE2b). The key is a libsodium
+ * generichash key (crypto_generichash_KEYBYTES bytes). The nonce is uniform.
  *
  * Returns 0 on success, -1 on error.
  */

@@ -1,3 +1,27 @@
+/*
+ * Zero-bit pseudorandom error-correcting code from sparse parity checks and LPN
+ * (the LDPC based construction of M. Christ and S. Gunn, "Pseudorandom
+ * Error-Correcting Codes", CRYPTO 2024).
+ *
+ * Keys. A sparse parity-check matrix P (r x n, exactly t ones per row), a
+ * generator matrix G (n x g) whose columns are uniform elements of ker P, so
+ * P G = 0, and a one-time pad z in F_2^n. The encoding key is (G, z), the
+ * decoding key (P, z).
+ *
+ * Encode: c = G s + z + e with s uniform in F_2^g and e ~ Ber(n, eta) (each
+ * coordinate 1 with probability eta). Under the learning-parity-with-noise (LPN)
+ * assumption for G, and a planted-XOR assumption for the sparse rows of P, c is
+ * pseudorandom without the key.
+ *
+ * Decode: P (c + z) = P G s + P e = P e, since P G = 0. Each coordinate of P e is
+ * the parity of t entries of e, which is 1 with probability well below 1/2 when e
+ * is sparse. For a string that is not a codeword the syndrome is uniform, i.e. of
+ * weight about r/2. The decoder accepts iff the weight is below
+ * (1/2 - r^(-1/4)) r, a threshold that separates the two cases by Hoeffding's
+ * inequality; a legitimate codeword is accepted also after a binary symmetric
+ * channel adds noise as long as the total noise rate is a constant below 1/2.
+ */
+
 #include "../zerobit_prc.h"
 #include "prc_ldpc.h"
 
@@ -10,20 +34,6 @@
 
 #include "../../../utils/matrix.h"
 #include "../../../utils/random_utils.h"
-
-/*
- * ================================================================
- * Constants / helpers
- * ================================================================
- */
-
-
-/*
- * ================================================================
- * Packed bit vector
- * ================================================================
- */
-
 
 /* Is col among the first `placed` positions of the row? */
 static int sparse_row_contains(const SparseP *P,
@@ -46,6 +56,10 @@ static int sparse_row_contains(const SparseP *P,
 }
 
 
+/*
+ * Samples P uniformly among the matrices with t ones in every row: for each row, t
+ * distinct column positions are drawn by rejection of repeats.
+ */
 void sample_sparse_p(RandomnessSource *random,
                             SparseP *P)
 {
@@ -126,6 +140,9 @@ void ldpc_free_dec_key(const void *params, ZBPRC_DecKey *key)
     free(key);
 }
 
+/*
+ * Codeword length n in bits.
+ */
 size_t
 ldpc_blocksize(const void *params_ptr){
     const LDPCParams *params =
@@ -135,11 +152,10 @@ ldpc_blocksize(const void *params_ptr){
 
 
 /*
- * ================================================================
- * KeyGen
- * ================================================================
+ * Key generation: samples P, computes a basis of ker P (kernel_basis, Gauss-Jordan
+ * elimination), draws every column of G as a uniform element of ker P (a random
+ * XOR of the basis vectors) and the pad z. Fails if dim ker P < g.
  */
-
 ZBPRC_Keys *
 ldpc_keygen(const void *params_ptr,
             RandomnessSource *random)
@@ -279,11 +295,8 @@ ldpc_keygen(const void *params_ptr,
 }
 
 /*
- * ================================================================
- * Encode
- * ================================================================
+ * Encodes the bit 1: c = G s + z + e with s uniform and e ~ Ber(n, eta); the result is packed LSB first.
  */
-
 uint8_t *
 ldpc_encode(const void *params_ptr,
             const ZBPRC_EncKey *key,
@@ -387,11 +400,9 @@ ldpc_encode(const void *params_ptr,
 
 
 /*
- * ================================================================
- * Decode
- * ================================================================
+ * Accepts iff wgt(P (c + z)) < (1/2 - r^(-1/4)) r (see the comment at the top of the
+ * file). Strings of a length other than n are rejected.
  */
-
 int
 ldpc_decode(const void *params_ptr,
             const ZBPRC_DecKey *key,
@@ -492,11 +503,8 @@ ldpc_decode(const void *params_ptr,
 
 
 /*
- * ================================================================
- * LDPC zero-bit PRC instantiation
- * ================================================================
+ * The LDPC zero-bit PRC as a ZBPRC (the parameters must outlive it).
  */
-
 ZBPRC
 prc_ldpc(const LDPCParams *params)
 {

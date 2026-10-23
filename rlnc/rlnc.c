@@ -1,3 +1,20 @@
+/*
+ * Random linear network coding (RLNC) over GF(q), q = 2^m <= 256.
+ *
+ * A generation consists of K source packets w_1..w_K, each a vector of GF(q)
+ * symbols. A coded symbol carries a global encoding vector gamma in GF(q)^K (the
+ * "header") and the payload u = sum_k gamma_k w_k. Any node can create new symbols
+ * as random linear combinations of the symbols it holds; the global vector of the
+ * result is the same combination of the global vectors. A receiver that holds K
+ * symbols whose global vectors are linearly independent recovers the generation
+ * by solving a linear system. See T. Ho et al., "A random linear network coding
+ * approach to multicast", IEEE Trans. Inf. Theory 52(10), 2006, and P. A. Chou,
+ * Y. Wu, K. Jain, "Practical network coding", Allerton 2003 (generations and
+ * global encoding vectors in the packet headers).
+ *
+ * The anamorphic mode is in arlnc.c; it uses encode_with_vector below.
+ */
+
 #include "rlnc.h"
 
 #include <stdlib.h>
@@ -5,19 +22,14 @@
 #include "../utils/random_utils.h"
 
 /*
- * Primitive / irreducible polynomials for GF(2^m).
- *
- * The polynomial is represented with the x^m term included.
- *
- * Examples:
- *   GF(2):    x + 1
- *   GF(4):    x^2 + x + 1
- *   GF(8):    x^3 + x + 1
- *   GF(16):   x^4 + x + 1
- *   GF(32):   x^5 + x^2 + 1
- *   GF(64):   x^6 + x + 1
- *   GF(128):  x^7 + x + 1
- *   GF(256):  x^8 + x^4 + x^3 + x^2 + 1
+ * Field polynomial of GF(q) = GF(2)[x] / (f), bit i = coefficient of x^i, with
+ * the x^m term included (0x11D = x^8 + x^4 + x^3 + x^2 + 1, the polynomial of
+ * the usual GF(256) of Reed-Solomon codes, e.g. in AES it would be 0x11B).
+ * The polynomials are irreducible, in fact primitive, so x generates the
+ * multiplicative group:
+ *   GF(2): x + 1             GF(4): x^2 + x + 1        GF(8): x^3 + x + 1
+ *   GF(16): x^4 + x + 1      GF(32): x^5 + x^2 + 1     GF(64): x^6 + x + 1
+ *   GF(128): x^7 + x + 1     GF(256): x^8 + x^4 + x^3 + x^2 + 1
  */
 static uint32_t gf_polynomial(uint32_t q)
 {
@@ -51,6 +63,9 @@ static unsigned field_bits(uint32_t q)
     return m;
 }
 
+/*
+ * Number of GF(q) symbols of a payload of packet_size bytes (m bits each).
+ */
 static size_t symbol_count(const rlnc_config_t *cfg)
 {
     const size_t bits = cfg->packet_size * 8;
@@ -66,12 +81,13 @@ static size_t symbol_count(const rlnc_config_t *cfg)
 
 static uint32_t gf_add(uint32_t a, uint32_t b)
 {
-    /*
-     * Addition in characteristic 2 is XOR.
-     */
+    /* addition in characteristic 2 is the XOR of the coefficient vectors */
     return a ^ b;
 }
 
+/*
+ * a * b in GF(q): polynomial product modulo the field polynomial.
+ */
 static uint32_t gf_mul(
     uint32_t a,
     uint32_t b,
@@ -83,7 +99,10 @@ static uint32_t gf_mul(
     uint32_t result = 0;
 
     /*
-     * Russian-peasant multiplication in GF(2^m).
+     * Shift-and-add ("Russian peasant") multiplication: for every bit b_i of b
+     * add a * x^i to the result, where a * x is a shift of a by one position
+     * followed by a reduction modulo the field polynomial if the coefficient of
+     * x^(m-1) was shifted out.
      */
     for (unsigned i = 0; i < m; ++i) {
         if (b & 1u)
@@ -102,6 +121,9 @@ static uint32_t gf_mul(
     return result & (q - 1);
 }
 
+/*
+ * a^exponent in GF(q) by square-and-multiply (binary exponentiation), O(log exponent) multiplications.
+ */
 static uint32_t gf_pow(
     uint32_t a,
     uint32_t exponent,
@@ -120,15 +142,15 @@ static uint32_t gf_pow(
     return result;
 }
 
+/*
+ * 1/a in GF(q) (0 for a = 0).
+ */
 static uint32_t gf_inv(uint32_t a, uint32_t q)
 {
     if (a == 0)
         return 0;
 
-    /*
-     * In GF(q), a^(q-1) = 1 for a != 0,
-     * hence a^(-1) = a^(q-2).
-     */
+    /* Fermat: a^(q-1) = 1 for a != 0 in GF(q), hence a^(-1) = a^(q-2) */
     return gf_pow(a, q - 2, q);
 }
 
@@ -208,11 +230,7 @@ int rlnc_config_valid(const rlnc_config_t *cfg)
     if (cfg == NULL)
         return 0;
 
-    /*
-     * XOR addition is only possible for fields of characteristic 2.
-     *
-     * Therefore q must be 2^m.
-     */
+    /* the arithmetic is that of GF(2^m): q must be a power of two */
     if (!is_power_of_two(cfg->q))
         return 0;
 
@@ -270,6 +288,10 @@ void rlnc_packet_free(rlnc_packet_t *packet)
  * ------------------------------------------------------------------------- */
 
 
+/*
+ * Samples a local encoding vector: input_count coefficients, each uniform in GF(q).
+ * A symbol is the combination sum_j alpha_j * (packet j) with these coefficients.
+ */
  int rlnc_sample_local_encoding_vector(
     const rlnc_config_t *cfg,
     size_t input_count,
@@ -291,6 +313,14 @@ void rlnc_packet_free(rlnc_packet_t *packet)
 }
 
 
+/*
+ * Creates one coded symbol as the linear combination
+ *     out = sum_j alpha_j * packets[j]
+ * of the input symbols with the given local coefficients alpha, applied both to the
+ * global encoding vectors and to the payloads (a matrix-vector product over GF(q)).
+ * If the inputs are the source packets (global vectors e_1..e_K), the global vector of
+ * the output is alpha itself. The anamorphic encoder uses this with a chosen alpha.
+ */
 int rlnc_encode_with_vector(
     const rlnc_config_t *cfg,
     const rlnc_packet_t *packets,
@@ -394,6 +424,9 @@ int rlnc_encode_with_vector(
 }
 
 
+/*
+ * Creates one coded symbol from fresh random coefficients: a random linear combination of the input symbols.
+ */
 int rlnc_encode(
     const rlnc_config_t *cfg,
     const rlnc_packet_t *packets,
@@ -458,6 +491,18 @@ int rlnc_encode(
  * ------------------------------------------------------------------------- */
 
 
+/*
+ * Recovers the K source packets from received symbols (at least K).
+ *
+ * Solves the linear system [gamma_j | u_j] over GF(q) by Gauss-Jordan elimination
+ * on the augmented matrix whose rows are the received global vectors followed by
+ * the payloads: for each column find a row with a non-zero entry, normalise it with
+ * the inverse of the pivot, and eliminate the column from all other rows. When the
+ * left part is the identity the right part holds w_1..w_K. All received rows
+ * are used, so a surplus of symbols compensates for dependent ones. Returns -1 if
+ * the global vectors do not have rank K. Cost O(R K (K + D)) field operations for
+ * R received symbols and D payload symbols.
+ */
 int rlnc_decode(
     const rlnc_config_t *cfg,
     const rlnc_packet_t *received,

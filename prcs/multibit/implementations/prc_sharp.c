@@ -1,3 +1,30 @@
+/*
+ * PRC_sharp: a PRC for messages of message_bits bits, built from an inner
+ * multibit PRC (PRC_low) that encodes lambda + message_bits + lambda bits.
+ *
+ * Encode(m): sample a seed r of lambda bits and derive pseudorandom bits
+ * R1 || R2 from (r, m); encode the payload r || m || R2 with the inner PRC, using
+ * R1 as the coins of the inner encoder. (R2 is the first lambda bits of the
+ * derived stream, R1 the following ones, which the inner encoder consumes.)
+ *
+ * Decode(c): decode the inner PRC to r || m || R2', recompute R1 and R2 from
+ * (r, m), and accept iff R2' = R2 and the re-encoding of the payload with the
+ * coins R1 is within relative Hamming distance delta of the received word. The
+ * re-encoding check rejects words that decode but were not produced by Encode
+ * (the idea of re-encrypting and comparing, cf. the Fujisaki-Okamoto
+ * transformation, CRYPTO 1999); delta must exceed the noise rate of the channel.
+ *
+ * The seed r can be recovered by the decoder (decode_ws), which is what the
+ * randomness-recovery anamorphism (rr_core.c) uses: the encoder takes r as input
+ * (encode_ws).
+ */
+/*
+ * NOTE: the pseudorandom stream is a counter-mode generator seeded with r || m
+ * (csprg_randomness). The key prf_key is generated and stored but not mixed
+ * into the stream, so R1 and R2 are a public function of (r, m) here; a keyed PRF
+ * F_sk(r || m) would be needed for the full security argument.
+ */
+
 #include "prc_sharp.h"
 #include "../../../utils/csprg_sodium.h"
 #include "../../../utils/helpers.h"
@@ -322,16 +349,7 @@ sharp_encode_ws(
     );
 
 
-    /*
-     * ------------------------------------------------------------
-     * 3. Compute
-     *
-     *     F_sk(r || m) = R1 || R2 (switch order)
-     *
-     *
-     * R2 has lambda bits.
-     * ------------------------------------------------------------
-     */
+    /* 3. derive the stream R2 || R1 from (r, m); R2 are its first lambda bits */
 
     RandomnessSource pseudo = csprg_randomness(rm, rm_bytes);
 
@@ -394,7 +412,7 @@ sharp_encode_ws(
     );
 
 
-    //pseudo now contains r1
+    /* what remains of the stream is R1, the coins of the inner encoder */
 
 
     uint8_t *ciphertext =
@@ -652,13 +670,7 @@ sharp_decode_ws(
     );
 
 
-    /*
-     * ------------------------------------------------------------
-     * 3. Recompute F_sk(r || m)
-     *
-     *     F_sk(r || m) = R1 || R2'
-     * ------------------------------------------------------------
-     */
+    /* 3. recompute the stream from (r, m) and take R2' (its first lambda bits) */
 
     RandomnessSource pseudo = csprg_randomness(rm, rm_bytes);
 
@@ -707,7 +719,7 @@ sharp_decode_ws(
     }
 
 
-    //reencode the message using pseudo
+    /* re-encode the recovered payload with the coins R1 */
 
     size_t ciphertext_tilde_bits = 0;
 
@@ -722,13 +734,12 @@ sharp_decode_ws(
             decoded_bits,
 
             &pseudo,
-            //random,
 
             &ciphertext_tilde_bits
         );
 
 
-    //check distance between reencoded and received:
+    /* the re-encoding must be close to the received word (the channel flips bits) */
 
     size_t dist = bitwise_hamming_dist(ciphertext, ciphertext_tilde, tmp_bytes);
 
@@ -803,7 +814,7 @@ if(!seed){
 
 int decoding = sharp_decode_ws(vparams, vkey, ciphertext, ciphertext_bits, message_out, message_bits_out, seed);
 
-//regular mode doesn't make use of the seed:
+/* regular decoding ignores the recovered seed */
 
 free(seed);
 return decoding;

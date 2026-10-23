@@ -1,3 +1,19 @@
+/*
+ * PRC_low: a PRC for messages of ell bits from a zero-bit PRC (the multi-bit
+ * extension of Christ and Gunn, "Pseudorandom Error-Correcting Codes", CRYPTO
+ * 2024, with one block per message bit).
+ *
+ * Encode(m): block i < ell is an encoding of the zero-bit PRC if m_i = 1 and a
+ * uniform string if m_i = 0; block ell is always an encoding (the soundness
+ * check). All ell + 1 blocks are concatenated and the bits are permuted with a
+ * secret permutation. A uniform block is indistinguishable from an encoding
+ * without the key, so the codeword is pseudorandom.
+ *
+ * Decode: undo the permutation, run the zero-bit decoder on every block (accepted
+ * = bit 1) and require that the last block is accepted. The permutation is
+ * harmless on a binary symmetric channel, which is permutation invariant.
+ */
+
 #include "prc_low.h"
 
 #include <stdlib.h>

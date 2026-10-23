@@ -1,3 +1,21 @@
+/*
+ * Zero-bit PRC for channels with deletions and insertions (substitutions), built
+ * on any zero-bit PRC with k-bit codewords: each codeword bit is expanded into a
+ * slice with the same majority, in the spirit of the constructions for indel
+ * channels in Christ and Gunn, "Pseudorandom Error-Correcting Codes", CRYPTO 2024.
+ *
+ * Encode: every bit b_i of a codeword of the underlying PRC is replaced by a
+ * uniform T-bit string z_i whose majority is b_i; the output is z_1 || ... || z_k
+ * (k T bits). Because each z_i is uniform among strings with that majority and
+ * the underlying codeword is pseudorandom, the output is pseudorandom.
+ *
+ * Decode: cut the received word into k consecutive slices of nearly equal length
+ * (the first (L mod k) slices have one extra bit, L = received length), take the
+ * majority of every slice and decode the resulting k bits with the underlying
+ * PRC. Isolated deletions and insertions only move slice boundaries slightly, so
+ * the majorities mostly stay correct.
+ */
+
 #include "prc_dc.h"
 
 #include <stdint.h>
