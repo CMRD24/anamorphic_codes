@@ -86,66 +86,66 @@ static double now_ms(void)
 }
 
 typedef struct {
-    double *v;
-    size_t n;
-    size_t cap;
+    double *values;
+    size_t count;
+    size_t capacity;
     size_t failures;
 } Samples;
 
-static int samples_init(Samples *s, size_t cap)
+static int samples_init(Samples *samples, size_t capacity)
 {
-    s->v = malloc((cap ? cap : 1) * sizeof(double));
-    s->n = 0;
-    s->cap = cap;
-    s->failures = 0;
+    samples->values = malloc((capacity ? capacity : 1) * sizeof(double));
+    samples->count = 0;
+    samples->capacity = capacity;
+    samples->failures = 0;
 
-    return s->v != NULL ? 0 : -1;
+    return samples->values != NULL ? 0 : -1;
 }
 
-static void samples_add(Samples *s, double ms)
+static void samples_add(Samples *samples, double ms)
 {
-    if (s->n < s->cap)
-        s->v[s->n++] = ms;
+    if (samples->count < samples->capacity)
+        samples->values[samples->count++] = ms;
 }
 
 typedef struct {
     double mean, stddev, min;
-    size_t n;
+    size_t count;
 } Stats;
 
-static Stats stats_of(const Samples *s)
+static Stats stats_of(const Samples *samples)
 {
-    Stats st = {0, 0, 0, s->n};
-    double sum = 0, sq = 0;
+    Stats stats = {0, 0, 0, samples->count};
+    double sum = 0, squares = 0;
 
-    if (s->n == 0)
-        return st;
+    if (samples->count == 0)
+        return stats;
 
-    st.min = s->v[0];
-    for (size_t i = 0; i < s->n; ++i) {
-        sum += s->v[i];
-        if (s->v[i] < st.min)
-            st.min = s->v[i];
+    stats.min = samples->values[0];
+    for (size_t i = 0; i < samples->count; ++i) {
+        sum += samples->values[i];
+        if (samples->values[i] < stats.min)
+            stats.min = samples->values[i];
     }
-    st.mean = sum / (double)s->n;
+    stats.mean = sum / (double)samples->count;
 
-    for (size_t i = 0; i < s->n; ++i)
-        sq += (s->v[i] - st.mean) * (s->v[i] - st.mean);
-    st.stddev = s->n > 1 ? sqrt(sq / (double)(s->n - 1)) : 0;
+    for (size_t i = 0; i < samples->count; ++i)
+        squares += (samples->values[i] - stats.mean) * (samples->values[i] - stats.mean);
+    stats.stddev = samples->count > 1 ? sqrt(squares / (double)(samples->count - 1)) : 0;
 
-    return st;
+    return stats;
 }
 
 /* element-wise sum of two sample sets of equal length (a + b of one round) */
 static int samples_sum(Samples *out, const Samples *a, const Samples *b)
 {
-    size_t n = a->n < b->n ? a->n : b->n;
+    size_t count = a->count < b->count ? a->count : b->count;
 
-    if (samples_init(out, n) != 0)
+    if (samples_init(out, count) != 0)
         return -1;
 
-    for (size_t i = 0; i < n; ++i)
-        samples_add(out, a->v[i] + b->v[i]);
+    for (size_t i = 0; i < count; ++i)
+        samples_add(out, a->values[i] + b->values[i]);
 
     return 0;
 }
@@ -186,20 +186,20 @@ static void quiet_end(void)
  * ------------------------------------------------------------------------ */
 
 typedef struct {
-    Samples keygen_regular, keygen_ana;
+    Samples keygen_regular, keygen_anamorphic;
     Samples encode, decode, aencode, adecode;
-    size_t ct_count, ct_bits, act_count, act_bits;
+    size_t regular_count, regular_bits, anamorphic_count, anamorphic_bits;
     int ok;
-} Result;
+} CodeResult;
 
-static void result_free(Result *r)
+static void code_result_free(CodeResult *result)
 {
-    free(r->keygen_regular.v);
-    free(r->keygen_ana.v);
-    free(r->encode.v);
-    free(r->decode.v);
-    free(r->aencode.v);
-    free(r->adecode.v);
+    free(result->keygen_regular.values);
+    free(result->keygen_anamorphic.values);
+    free(result->encode.values);
+    free(result->decode.values);
+    free(result->aencode.values);
+    free(result->adecode.values);
 }
 
 static int build_params(const BenchCode *code, const Options *opt, DemoParams *params)
@@ -207,39 +207,39 @@ static int build_params(const BenchCode *code, const Options *opt, DemoParams *p
     demo_params_defaults(params, code->ops->params);
 
     for (size_t i = 0; i < opt->num_overrides; ++i) {
-        const ParamOverride *o = &opt->overrides[i];
+        const ParamOverride *override = &opt->overrides[i];
 
-        if (strcmp(o->code, code->name) == 0 &&
-            demo_params_set(params, o->name, o->value) != 0)
+        if (strcmp(override->code, code->name) == 0 &&
+            demo_params_set(params, override->name, override->value) != 0)
             return -1;
     }
 
     return 0;
 }
 
-static int run_code(const BenchCode *code, const Options *opt, Result *r)
+static int run_code(const BenchCode *code, const Options *opt, CodeResult *result)
 {
     const DemoOps *ops = code->ops;
     DemoParams params;
     const size_t rounds = opt->keys * opt->ops;
 
-    memset(r, 0, sizeof(*r));
+    memset(result, 0, sizeof(*result));
 
     if (build_params(code, opt, &params) != 0)
         return -1;
 
-    if (samples_init(&r->keygen_regular, opt->keys) != 0 ||
-        samples_init(&r->keygen_ana, opt->keys) != 0 ||
-        samples_init(&r->encode, rounds) != 0 ||
-        samples_init(&r->decode, rounds) != 0 ||
-        samples_init(&r->aencode, rounds) != 0 ||
-        samples_init(&r->adecode, rounds) != 0)
+    if (samples_init(&result->keygen_regular, opt->keys) != 0 ||
+        samples_init(&result->keygen_anamorphic, opt->keys) != 0 ||
+        samples_init(&result->encode, rounds) != 0 ||
+        samples_init(&result->decode, rounds) != 0 ||
+        samples_init(&result->aencode, rounds) != 0 ||
+        samples_init(&result->adecode, rounds) != 0)
         return -1;
 
     for (size_t k = 0; k < opt->keys; ++k) {
         DemoKeys keys = {0};
         void *handle, *regular_only;
-        double t0;
+        double start;
 
         randombytes_buf(keys.regular, sizeof(keys.regular));
         randombytes_buf(keys.anamorphic, sizeof(keys.anamorphic));
@@ -247,9 +247,9 @@ static int run_code(const BenchCode *code, const Options *opt, Result *r)
         /* regular key generation (opening with the regular key only) */
         keys.have_regular = ops->regular_keys;
         keys.have_anamorphic = 0;
-        t0 = now_ms();
+        start = now_ms();
         regular_only = ops->open(&params, &keys);
-        const double t_regular = now_ms() - t0;
+        const double t_regular = now_ms() - start;
 
         if (regular_only == NULL)
             return -1;
@@ -257,80 +257,80 @@ static int run_code(const BenchCode *code, const Options *opt, Result *r)
 
         /* with the anamorphic key as well */
         keys.have_anamorphic = 1;
-        t0 = now_ms();
+        start = now_ms();
         handle = ops->open(&params, &keys);
-        const double t_both = now_ms() - t0;
+        const double t_both = now_ms() - start;
 
         if (handle == NULL)
             return -1;
 
         if (ops->regular_keys)
-            samples_add(&r->keygen_regular, t_regular);
-        samples_add(&r->keygen_ana, ops->regular_keys ? (t_both > t_regular ? t_both - t_regular : 0)
+            samples_add(&result->keygen_regular, t_regular);
+        samples_add(&result->keygen_anamorphic, ops->regular_keys ? (t_both > t_regular ? t_both - t_regular : 0)
                                                       : t_both);
 
         /* one untimed round per key: first-use costs (cold caches, lazy
          * allocation) would otherwise dominate small samples */
         {
-            DemoCiphertext ct = {0}, act = {0};
+            DemoCiphertext ciphertext = {0}, aciphertext = {0};
 
-            if (ops->encode(handle, code->message, &ct) == 0) {
-                ops->decode(handle, &ct);
-                demo_ct_free(&ct);
+            if (ops->encode(handle, code->message, &ciphertext) == 0) {
+                ops->decode(handle, &ciphertext);
+                demo_ct_free(&ciphertext);
             }
-            if (ops->aencode(handle, code->message, code->amessage, &act) == 0) {
-                ops->adecode(handle, &act);
-                demo_ct_free(&act);
+            if (ops->aencode(handle, code->message, code->amessage, &aciphertext) == 0) {
+                ops->adecode(handle, &aciphertext);
+                demo_ct_free(&aciphertext);
             }
         }
 
         for (size_t i = 0; i < opt->ops; ++i) {
-            DemoCiphertext ct = {0}, act = {0};
+            DemoCiphertext ciphertext = {0}, aciphertext = {0};
 
-            t0 = now_ms();
-            int rc = ops->encode(handle, code->message, &ct);
-            samples_add(&r->encode, now_ms() - t0);
-            if (rc != 0) {
-                r->encode.failures++;
+            start = now_ms();
+            int code_status = ops->encode(handle, code->message, &ciphertext);
+            samples_add(&result->encode, now_ms() - start);
+            if (code_status != 0) {
+                result->encode.failures++;
                 continue;
             }
 
-            t0 = now_ms();
-            rc = ops->decode(handle, &ct);
-            samples_add(&r->decode, now_ms() - t0);
-            if (rc != 0)
-                r->decode.failures++;
+            start = now_ms();
+            code_status = ops->decode(handle, &ciphertext);
+            samples_add(&result->decode, now_ms() - start);
+            if (code_status != 0)
+                result->decode.failures++;
 
-            t0 = now_ms();
-            rc = ops->aencode(handle, code->message, code->amessage, &act);
-            samples_add(&r->aencode, now_ms() - t0);
-            if (rc != 0) {
-                r->aencode.failures++;
-                demo_ct_free(&ct);
+            start = now_ms();
+            code_status = ops->aencode(handle, code->message, code->amessage, &aciphertext);
+            samples_add(&result->aencode, now_ms() - start);
+            if (code_status != 0) {
+                result->aencode.failures++;
+                demo_ct_free(&ciphertext);
                 continue;
             }
 
-            t0 = now_ms();
-            rc = ops->adecode(handle, &act);
-            samples_add(&r->adecode, now_ms() - t0);
-            if (rc != 0)
-                r->adecode.failures++;
+            start = now_ms();
+            code_status = ops->adecode(handle, &aciphertext);
+            samples_add(&result->adecode, now_ms() - start);
+            if (code_status != 0)
+                result->adecode.failures++;
 
-            if (r->ct_count == 0) {
-                r->ct_count = ct.count;
-                r->ct_bits = ct.bits;
-                r->act_count = act.count;
-                r->act_bits = act.bits;
+            if (result->regular_count == 0) {
+                result->regular_count = ciphertext.count;
+                result->regular_bits = ciphertext.bits;
+                result->anamorphic_count = aciphertext.count;
+                result->anamorphic_bits = aciphertext.bits;
             }
 
-            demo_ct_free(&ct);
-            demo_ct_free(&act);
+            demo_ct_free(&ciphertext);
+            demo_ct_free(&aciphertext);
         }
 
         ops->close(handle);
     }
 
-    r->ok = 1;
+    result->ok = 1;
 
     return 0;
 }
@@ -339,85 +339,85 @@ static int run_code(const BenchCode *code, const Options *opt, Result *r)
  * Reporting
  * ------------------------------------------------------------------------ */
 
-static void print_row(FILE *out, const char *name, const Samples *s)
+static void print_row(FILE *out, const char *name, const Samples *samples)
 {
-    Stats st = stats_of(s);
+    Stats stats = stats_of(samples);
 
-    if (st.n == 0) {
+    if (stats.count == 0) {
         fprintf(out, "  %-24s %10s\n", name, "n/a");
         return;
     }
 
-    fprintf(out, "  %-24s %10.3f %10.3f %10.3f %7zu", name, st.mean, st.stddev, st.min, st.n);
-    if (s->failures > 0)
-        fprintf(out, "   (%zu failed)", s->failures);
+    fprintf(out, "  %-24s %10.3f %10.3f %10.3f %7zu", name, stats.mean, stats.stddev, stats.min, stats.count);
+    if (samples->failures > 0)
+        fprintf(out, "   (%zu failed)", samples->failures);
     fprintf(out, "\n");
 }
 
 static void print_ratio(FILE *out, const char *name, const Samples *regular,
-                        const Samples *ana)
+                        const Samples *anamorphic)
 {
-    Stats a = stats_of(regular), b = stats_of(ana);
+    Stats a = stats_of(regular), b = stats_of(anamorphic);
 
-    if (a.n == 0 || b.n == 0 || a.mean <= 0)
+    if (a.count == 0 || b.count == 0 || a.mean <= 0)
         return;
 
     fprintf(out, "  %-24s x%-8.2f (%+.3f ms)\n", name, b.mean / a.mean, b.mean - a.mean);
 }
 
-static void csv_row(FILE *csv, const char *code, const char *op, const Samples *s)
+static void csv_row(FILE *csv, const char *code, const char *op, const Samples *samples)
 {
-    Stats st = stats_of(s);
+    Stats stats = stats_of(samples);
 
-    if (csv != NULL && st.n > 0)
-        fprintf(csv, "%s,%s,%zu,%.6f,%.6f,%.6f,%zu\n", code, op, st.n, st.mean, st.stddev,
-                st.min, s->failures);
+    if (csv != NULL && stats.count > 0)
+        fprintf(csv, "%s,%s,%zu,%.6f,%.6f,%.6f,%zu\n", code, op, stats.count, stats.mean, stats.stddev,
+                stats.min, samples->failures);
 }
 
-static void report(FILE *out, FILE *csv, const BenchCode *code, const Options *opt, Result *r)
+static void report(FILE *out, FILE *csv, const BenchCode *code, const Options *opt, CodeResult *result)
 {
-    Samples regular_total, ana_total;
-    int have_totals = samples_sum(&regular_total, &r->encode, &r->decode) == 0 &&
-                      samples_sum(&ana_total, &r->aencode, &r->adecode) == 0;
+    Samples regular_total, anamorphic_total;
+    int have_totals = samples_sum(&regular_total, &result->encode, &result->decode) == 0 &&
+                      samples_sum(&anamorphic_total, &result->aencode, &result->adecode) == 0;
 
     fprintf(out, "\n== %s  (%zu key%s x %zu round%s)\n", code->name, opt->keys,
             opt->keys == 1 ? "" : "s", opt->ops, opt->ops == 1 ? "" : "s");
     fprintf(out, "  %-24s %10s %10s %10s %7s\n", "operation", "mean [ms]", "stddev", "min", "n");
 
     if (code->ops->regular_keys)
-        print_row(out, "keygen (regular)", &r->keygen_regular);
+        print_row(out, "keygen (regular)", &result->keygen_regular);
     print_row(out, code->ops->regular_keys ? "keygen (anamorphic, +)" : "keygen (anamorphic)",
-              &r->keygen_ana);
-    print_row(out, "encode", &r->encode);
-    print_row(out, "aencode", &r->aencode);
-    print_row(out, "decode", &r->decode);
-    print_row(out, "adecode", &r->adecode);
+              &result->keygen_anamorphic);
+    print_row(out, "encode", &result->encode);
+    print_row(out, "aencode", &result->aencode);
+    print_row(out, "decode", &result->decode);
+    print_row(out, "adecode", &result->adecode);
 
     if (have_totals) {
         print_row(out, "encode + decode", &regular_total);
-        print_row(out, "aencode + adecode", &ana_total);
+        print_row(out, "aencode + adecode", &anamorphic_total);
     }
 
     fprintf(out, "  anamorphic / regular:\n");
-    print_ratio(out, "encode", &r->encode, &r->aencode);
-    print_ratio(out, "decode", &r->decode, &r->adecode);
+    print_ratio(out, "encode", &result->encode, &result->aencode);
+    print_ratio(out, "decode", &result->decode, &result->adecode);
     if (have_totals)
-        print_ratio(out, "encode + decode", &regular_total, &ana_total);
+        print_ratio(out, "encode + decode", &regular_total, &anamorphic_total);
 
     fprintf(out, "  ciphertext: regular %zu x %zu bits, anamorphic %zu x %zu bits\n",
-            r->ct_count, r->ct_bits, r->act_count, r->act_bits);
+            result->regular_count, result->regular_bits, result->anamorphic_count, result->anamorphic_bits);
 
-    csv_row(csv, code->name, "keygen_regular", &r->keygen_regular);
-    csv_row(csv, code->name, "keygen_anamorphic", &r->keygen_ana);
-    csv_row(csv, code->name, "encode", &r->encode);
-    csv_row(csv, code->name, "aencode", &r->aencode);
-    csv_row(csv, code->name, "decode", &r->decode);
-    csv_row(csv, code->name, "adecode", &r->adecode);
+    csv_row(csv, code->name, "keygen_regular", &result->keygen_regular);
+    csv_row(csv, code->name, "keygen_anamorphic", &result->keygen_anamorphic);
+    csv_row(csv, code->name, "encode", &result->encode);
+    csv_row(csv, code->name, "aencode", &result->aencode);
+    csv_row(csv, code->name, "decode", &result->decode);
+    csv_row(csv, code->name, "adecode", &result->adecode);
     if (have_totals) {
         csv_row(csv, code->name, "encode_decode", &regular_total);
-        csv_row(csv, code->name, "aencode_adecode", &ana_total);
-        free(regular_total.v);
-        free(ana_total.v);
+        csv_row(csv, code->name, "aencode_adecode", &anamorphic_total);
+        free(regular_total.values);
+        free(anamorphic_total.values);
     }
 }
 
@@ -448,15 +448,15 @@ static void usage(const char *prog)
         "Every round runs encode, decode, aencode and adecode with fresh randomness.\n");
 }
 
-static int parse_size(const char *s, size_t *out)
+static int parse_size(const char *samples, size_t *out)
 {
     char *end;
-    unsigned long long v = strtoull(s, &end, 10);
+    unsigned long long values = strtoull(samples, &end, 10);
 
-    if (*s == '\0' || *end != '\0' || v == 0)
+    if (*samples == '\0' || *end != '\0' || values == 0)
         return -1;
 
-    *out = (size_t)v;
+    *out = (size_t)values;
 
     return 0;
 }
@@ -470,48 +470,48 @@ static int parse_options(int argc, char **argv, Options *opt)
     opt->csv = NULL;
 
     for (int i = 1; i < argc; ++i) {
-        const char *a = argv[i];
-        const char *v = i + 1 < argc ? argv[i + 1] : NULL;
+        const char *argument = argv[i];
+        const char *value = i + 1 < argc ? argv[i + 1] : NULL;
 
-        if (strcmp(a, "--keys") == 0 && v) {
-            if (parse_size(v, &opt->keys) != 0) {
-                fprintf(stderr, "--keys needs a positive integer\n");
+        if (strcmp(argument, "--keys") == 0 && value) {
+            if (parse_size(value, &opt->keys) != 0) {
+                fprintf(stderr, "--keys needs argument positive integer\n");
                 return -1;
             }
             ++i;
-        } else if (strcmp(a, "--ops") == 0 && v) {
-            if (parse_size(v, &opt->ops) != 0) {
-                fprintf(stderr, "--ops needs a positive integer\n");
+        } else if (strcmp(argument, "--ops") == 0 && value) {
+            if (parse_size(value, &opt->ops) != 0) {
+                fprintf(stderr, "--ops needs argument positive integer\n");
                 return -1;
             }
             ++i;
-        } else if (strcmp(a, "--codes") == 0 && v) {
-            if (strlen(v) >= sizeof(opt->selection)) {
+        } else if (strcmp(argument, "--codes") == 0 && value) {
+            if (strlen(value) >= sizeof(opt->selection)) {
                 fprintf(stderr, "--codes list too long\n");
                 return -1;
             }
-            strcpy(opt->selection, v);
+            strcpy(opt->selection, value);
             ++i;
-        } else if (strcmp(a, "--csv") == 0 && v) {
-            opt->csv = v;
+        } else if (strcmp(argument, "--csv") == 0 && value) {
+            opt->csv = value;
             ++i;
-        } else if (strcmp(a, "--param") == 0 && v) {
-            ParamOverride *o;
-            const char *colon = strchr(v, ':');
-            const char *eq = strchr(v, '=');
+        } else if (strcmp(argument, "--param") == 0 && value) {
+            ParamOverride *override;
+            const char *colon = strchr(value, ':');
+            const char *equals = strchr(value, '=');
 
-            if (opt->num_overrides >= MAX_PARAM_OVERRIDES || !colon || !eq || colon > eq ||
-                (size_t)(colon - v) >= sizeof(o->code) || (size_t)(eq - colon - 1) >= sizeof(o->name) ||
-                strlen(eq + 1) >= sizeof(o->value)) {
-                fprintf(stderr, "--param expects CODE:NAME=VALUE, got '%s'\n", v);
+            if (opt->num_overrides >= MAX_PARAM_OVERRIDES || !colon || !equals || colon > equals ||
+                (size_t)(colon - value) >= sizeof(override->code) || (size_t)(equals - colon - 1) >= sizeof(override->name) ||
+                strlen(equals + 1) >= sizeof(override->value)) {
+                fprintf(stderr, "--param expects CODE:NAME=VALUE, got '%s'\n", value);
                 return -1;
             }
 
-            o = &opt->overrides[opt->num_overrides++];
-            memset(o, 0, sizeof(*o));
-            memcpy(o->code, v, (size_t)(colon - v));
-            memcpy(o->name, colon + 1, (size_t)(eq - colon - 1));
-            strcpy(o->value, eq + 1);
+            override = &opt->overrides[opt->num_overrides++];
+            memset(override, 0, sizeof(*override));
+            memcpy(override->code, value, (size_t)(colon - value));
+            memcpy(override->name, colon + 1, (size_t)(equals - colon - 1));
+            strcpy(override->value, equals + 1);
             ++i;
         } else {
             return -1;
@@ -524,14 +524,14 @@ static int parse_options(int argc, char **argv, Options *opt)
 static int selected(const Options *opt, const char *name)
 {
     char list[256];
-    char *tok;
+    char *token;
 
     if (strcmp(opt->selection, "all") == 0)
         return 1;
 
     strcpy(list, opt->selection);
-    for (tok = strtok(list, ","); tok != NULL; tok = strtok(NULL, ",")) {
-        if (strcmp(tok, name) == 0)
+    for (token = strtok(list, ","); token != NULL; token = strtok(NULL, ",")) {
+        if (strcmp(token, name) == 0)
             return 1;
     }
 
@@ -567,8 +567,8 @@ int main(int argc, char **argv)
     }
 
     for (size_t i = 0; i < NUM_CODES; ++i) {
-        Result r;
-        int rc;
+        CodeResult result;
+        int code_status;
 
         if (!selected(&opt, codes[i].name))
             continue;
@@ -577,17 +577,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "running %s ...\n", codes[i].name);
 
         quiet_begin();
-        rc = run_code(&codes[i], &opt, &r);
+        code_status = run_code(&codes[i], &opt, &result);
         quiet_end();
 
-        if (rc != 0) {
+        if (code_status != 0) {
             fprintf(stderr, "%s: benchmark failed (check --param values)\n", codes[i].name);
             status = 1;
         } else {
-            report(out, csv, &codes[i], &opt, &r);
+            report(out, csv, &codes[i], &opt, &result);
         }
 
-        result_free(&r);
+        code_result_free(&result);
     }
 
     if (!ran) {

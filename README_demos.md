@@ -92,26 +92,26 @@ zeros removed), or as hex if they are not printable.
 | `low` | `ell/8` bytes | a bit string of at most `ell+1` characters `0`/`1` (one bit per block, padded with `0`), not all zero |
 | `high` | `message_bits/8` bytes | `amessage_bytes` bytes |
 | `sharp`, `cca` | `message_bits/8` bytes | `amessage_bytes` bytes |
-| `rlnc` | one generation: `generation_size * packet_size` bytes | `(received-1) * (generation_size - a)` bytes with `a = ceil(lambda / log2 q)`; one GF(q) symbol per byte |
-| `wiretap` | any length, padded to a multiple of `K_bytes` | `ana_message_length` bytes |
+| `rlnc` | one generation: `generation_size * payload_bytes` bytes | `(received_symbols-1) * (generation_size - a)` bytes with `a = ceil(lambda / log2 q)`; one GF(q) symbol per byte |
+| `wiretap` | any length, padded to a multiple of `block_bytes` | `amessage_bytes` bytes |
 
 For `1a` and `low` the anamorphic mode is the anamorphic lifting construction on
 top of the anamorphic LDPC PRC: the ciphertext is a single codeword with `ell+1`
 blocks (one for `1a`), and each block can hide one anamorphic bit, so the
 anamorphic message is a bit string. `adecode` prints it with all `ell+1`
-positions. They use the LDPC parameters of `demo_ldpc` (a large `g`).
+positions. They use the LDPC parameters of `demo_ldpc`.
 
 `pp`, `high`, `sharp`, `cca` (and `demo_wiretap`) use randomness recovery: the
-decoder recovers the seed of the encoding (`message_bytes` bytes for `pp`,
-`lambda/8` or `lambda_bits/8` bytes for the others), and the anamorphic sender
+decoder recovers the seed of the encoding (`seed_bytes` bytes for `pp`,
+`lambda/8` bytes for the others), and the anamorphic sender
 puts the pseudorandom encryption `nonce || (PRF(key, nonce) xor message)` of the
 anamorphic message there. The ciphertext fills the seed, so the nonce takes the
 bytes the message leaves and must keep at least 8 bytes: with the defaults
 (`amessage_bytes` 16 for a 24 byte seed, 8 for a 16 byte seed) the anamorphic
 ciphertext is a single codeword (`mu = 1`), exactly as long as a regular one.
-A longer message needs more seeds: `mu = indication_len + c`, where `c` is the
+A longer message needs more seeds: `mu = indication_seeds + c`, where `c` is the
 smallest number of seeds that hold nonce and message (`c = 1` as long as
-`amessage_bytes <= seed bytes - 8`). `indication_len` adds that many extra
+`amessage_bytes <= seed bytes - 8`). `indication_seeds` adds that many extra
 codewords whose seeds satisfy `PRF(seed) = 0`; they make `adecode` reject strings
 that are not anamorphic. Without them (the default) the decryption is not
 authenticated, so `adecode` returns some message for every codeword it can
@@ -123,7 +123,7 @@ A ciphertext file is text: the line `demo-ciphertext`, a line
 `<count> <bits per codeword>`, and one hex line per codeword (bit `i` is bit
 `i mod 8` of byte `i / 8`). For `rlnc` each codeword is one symbol (global
 encoding vector, then payload); `decode` uses all symbols in the file and
-`adecode` the first `received` of them. You can delete or edit lines to simulate
+`adecode` the first `received_symbols` of them. You can delete or edit lines to simulate
 a channel.
 
 ## Parameters
@@ -132,33 +132,42 @@ a channel.
 
 | Demo | Parameters |
 |---|---|
-| `ldpc` | `n=1024 r=256 g=512 t=10 eta=0.01` |
-| `dc` | `n=128 r=64 g=32 t=4 eta=0.01 T=211` |
-| `1a` | `n=1024 r=256 g=512 t=10 eta=0.01` |
-| `low` | `n=1024 r=256 g=512 t=10 eta=0.01 ell=40` |
-| `pp` | `n=384 q=2 symbol_bits=1 message_bytes=24 delta=0 ecc=hamming indication_len=0 amessage_bytes=16` |
-| `high` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda=128 message_bits=64 indication_len=0 amessage_bytes=8` |
-| `sharp`, `cca` | `n=1024 r=512 g=256 t=11 eta=0.01 lambda_bits=128 message_bits=32 delta=0.05 indication_len=0 amessage_bytes=8` |
-| `rlnc` | `q=256 packet_size=64 generation_size=16 lambda=64 received=20 sent=40` |
-| `wiretap` | `K_bytes=32 security_parameter=128 ana_message_length=16` |
+| `ldpc` | `n=65536 epsilon=3/4 delta=1/4 eta=0.005` |
+| `dc` | `n=16384 epsilon=6/7 delta=1/4 eta=0.005 slice_bits=211` |
+| `1a` | `n=65536 epsilon=3/4 delta=1/4 eta=0.005` |
+| `low` | `n=65536 epsilon=3/4 delta=1/4 eta=0.005 ell=40` |
+| `pp` | `n=384 q=2 symbol_bits=1 seed_bytes=24 delta=0 ecc=hamming indication_seeds=0 amessage_bytes=16` |
+| `high` | `n=16384 epsilon=6/7 delta=1/4 eta=0.005 lambda=128 message_bits=64 indication_seeds=0 amessage_bytes=8` |
+| `sharp`, `cca` | `n=16384 epsilon=6/7 delta=1/4 eta=0.005 lambda=128 message_bits=32 distance=0.05 indication_seeds=0 amessage_bytes=8` |
+| `rlnc` | `q=256 payload_bytes=64 generation_size=16 lambda=64 received_symbols=20 sent_symbols=40` |
+| `wiretap` | `block_bytes=32 lambda=128 amessage_bytes=16` |
 
 Notes on the parameters:
 
-- `n r g t eta` are the LDPC parameters (block length, parity checks, generator
-  columns, check sparsity, encoder noise). Changing them changes the keys, so
-  run `keygen` again.
-- `ldpc` anamorphism uses `g/2` extra parity checks, so `g` must be large
-  enough for the decoding threshold: with a small `g` (for example 100 or 256
-  at `n=1024`) anamorphic decoding fails regularly.
+- `n epsilon delta eta` define the LDPC PRC by the admissible choice of the
+  thesis: `r = r' = ceil(n^(epsilon/2))` regular and anamorphic parity checks,
+  `kappa = ceil(n^epsilon)`, `g = kappa + r'` generator columns, sparsity
+  `t = floor(delta log2 n)` and encoder noise `eta` (a fraction such as `3/4` is
+  accepted). `setup` rejects values that violate the requirements (R1)-(R6) of
+  the thesis or give `r <= 16` (then the decoding threshold
+  `(1/2 - r^(-1/4)) r` is not positive). The defaults have `n^epsilon = 2^12`,
+  i.e. `r = r' = 64`, `kappa = 4096`, `g = 4160`; the codes whose codewords
+  consist of many LDPC blocks (`dc`, `high`, `sharp`, `cca`) use `n = 2^14`,
+  the others `n = 2^16`. Changing the parameters changes the keys, so run
+  `keygen` again.
+- The anamorphic LDPC mode is secure for `Q = kappa - log2(n)^2` anamorphic
+  codewords per key (3840 with the defaults of `ldpc`).
+- `distance` (`sharp`, `cca`) is the relative Hamming distance up to which the
+  re-encoding check accepts; it must exceed the noise rate of the channel.
 - For `pp` the recovered seed is the ECC input, so `n` must match
-  `message_bytes` (Hamming(7,4) doubles it: `n = 16 * message_bytes` symbols of
+  `seed_bytes` (Hamming(7,4) doubles it: `n = 16 * seed_bytes` symbols of
   one bit). `amessage_bytes` is at most the seed length minus 8 bytes for a
   single codeword (see above).
-- `rlnc` needs `generation_size >= 2a`, `received >= generation_size` and
-  `sent >= received`. The defaults give only 64-bit security because the
+- `rlnc` needs `generation_size >= 2a`, `received_symbols >= generation_size` and
+  `sent_symbols >= received_symbols`. The defaults give only 64-bit security because the
   generation is small; use `lambda=128` with `q=16 generation_size=64` or
   larger for a 128-bit instance.
-- `wiretap` needs `K_bytes` even and `K_bytes - ana_message_length >= 16`.
+- `wiretap` needs `block_bytes` even and `block_bytes - amessage_bytes >= 16`.
 
 ## Example
 
@@ -182,9 +191,9 @@ build/demo_cca --dir bob decode  msg.ct   # codeword 0: ping ...
 ## Limitations
 
 - `adecode` of `demo_wiretap`, and of `pp`, `high`, `sharp`, `cca` with the default
-  `indication_len=0`, returns output for ciphertexts that contain no anamorphic
+  `indication_seeds=0`, returns output for ciphertexts that contain no anamorphic
   message: the encryption of the seed is not authenticated, so every ciphertext
-  decodes to something (set `indication_len` for the PRCs to get rejection).
+  decodes to something (set `indication_seeds` for the PRCs to get rejection).
   `demo_ldpc`, `demo_1a`, `demo_low` and `demo_rlnc` reject ciphertexts without
   an anamorphic message.
 - The PRC demos do not model a channel; to test error correction, flip bits in
@@ -229,7 +238,7 @@ Notes:
   key.
 - The randomness-recovery codes (`pp`, `high`, `sharp`, `cca`) use `mu = 1` by
   default, so an anamorphic ciphertext is as large as a regular one and the
-  overhead is the encryption of the seed. Set `--param CODE:indication_len=N` or
+  overhead is the encryption of the seed. Set `--param CODE:indication_seeds=N` or
   a longer `amessage_bytes` to benchmark `mu > 1`; the anamorphic operations
   then process `mu` times as much data and the ratio mostly reflects `mu`.
 - The codes print their results while decoding; `bench` discards that output.

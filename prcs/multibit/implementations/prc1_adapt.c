@@ -1,12 +1,12 @@
 /*
- * PRC^1_adapt: a one-bit PRC from two independent keys of a zero-bit PRC (the
- * adaptive one-bit construction of Christ and Gunn, "Pseudorandom
+ * PRC^1_adapt: a one-bit PRC from two independent instances of a zero-bit PRC
+ * (the adaptive one-bit construction of Christ and Gunn, "Pseudorandom
  * Error-Correcting Codes", CRYPTO 2024).
  *
- * Encode(b): encode 1 with the key number b. Decode: run the zero-bit decoder with
- * both keys; exactly one must accept and its index is the bit. Each key alone
- * sees a pseudorandom word, and a word accepted under no key or both keys is
- * rejected.
+ * Encode(m): encode 1 with instance m. Decode: run the zero-bit decoder of both
+ * instances; exactly one must accept and its index is the bit. Each instance
+ * alone sees a pseudorandom word, and a word accepted by no or by both
+ * instances is rejected.
  */
 
 #include "prc1_adapt.h"
@@ -14,438 +14,175 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-/*
- * ================================================================
- * Concrete wrapper key types
- * ================================================================
- *
- * MBPRC_EncKey and MBPRC_DecKey are opaque in the generic interface.
- * This implementation defines their concrete representation.
- */
+#define INSTANCES 2      /* J */
 
 struct MBPRC_EncKey {
-
-    ZBPRC_EncKey *key0;
-    ZBPRC_EncKey *key1;
-
+    ZBPRC_EncKey *instance[INSTANCES];
 };
-
 
 struct MBPRC_DecKey {
-
-    ZBPRC_DecKey *key0;
-    ZBPRC_DecKey *key1;
-
+    ZBPRC_DecKey *instance[INSTANCES];
 };
 
 
-/*
- * ================================================================
- * Key generation
- * ================================================================
- */
-
-static MBPRC_Keys *
-prc1_adapt_keygen(
-    const void *params,
-    RandomnessSource *random)
+static size_t adapt_block_length(const void *params_ptr)
 {
-    const PRC1AdaptParams *adapt_params =
-        (const PRC1AdaptParams *)params;
+    const PRC1AdaptParams *params = params_ptr;
 
-    const ZBPRC *prc;
+    return zbprc_block_length(params->underlying_prc);
+}
 
+static void adapt_free_enc_key(const void *params_ptr, MBPRC_EncKey *enc_key)
+{
+    const PRC1AdaptParams *params = params_ptr;
 
-    ZBPRC_Keys *keys0 = NULL;
-    ZBPRC_Keys *keys1 = NULL;
+    if (enc_key == NULL)
+        return;
 
-    MBPRC_EncKey *enc = NULL;
-    MBPRC_DecKey *dec = NULL;
-    MBPRC_Keys *keys = NULL;
-
-
-    if (!adapt_params ||
-        !adapt_params->underlying_prc ||
-        !random ||
-        !random->rng)
-    {
-        return NULL;
+    for (int j = 0; j < INSTANCES; ++j) {
+        if (enc_key->instance[j] != NULL)
+            zbprc_free_enc_key(params->underlying_prc, enc_key->instance[j]);
     }
 
-    prc = adapt_params->underlying_prc;
+    free(enc_key);
+}
 
+static void adapt_free_dec_key(const void *params_ptr, MBPRC_DecKey *dec_key)
+{
+    const PRC1AdaptParams *params = params_ptr;
 
-    /*
-     * Generate the two independent zero-bit PRC key pairs.
-     */
+    if (dec_key == NULL)
+        return;
 
-    keys0 = zbprc_keygen(
-        prc,
-        random
-    );
+    for (int j = 0; j < INSTANCES; ++j) {
+        if (dec_key->instance[j] != NULL)
+            zbprc_free_dec_key(params->underlying_prc, dec_key->instance[j]);
+    }
 
-    if (!keys0)
-        goto fail;
+    free(dec_key);
+}
 
+/* two independent key pairs of the underlying PRC */
+static MBPRC_Keys *adapt_keygen(const void *params_ptr, RandomnessSource *random)
+{
+    const PRC1AdaptParams *params = params_ptr;
 
-    keys1 = zbprc_keygen(
-        prc,
-        random
-    );
+    if (params == NULL || params->underlying_prc == NULL || random == NULL ||
+        random->rng == NULL)
+        return NULL;
 
-    if (!keys1)
-        goto fail;
+    MBPRC_Keys *keys = calloc(1, sizeof(*keys));
 
+    if (keys == NULL)
+        return NULL;
 
-    enc = malloc(sizeof(*enc));
+    keys->enc = calloc(1, sizeof(*keys->enc));
+    keys->dec = calloc(1, sizeof(*keys->dec));
 
-    if (!enc)
-        goto fail;
+    for (int j = 0; keys->enc != NULL && keys->dec != NULL && j < INSTANCES; ++j) {
+        ZBPRC_Keys *instance_keys = zbprc_keygen(params->underlying_prc, random);
 
+        if (instance_keys == NULL)
+            break;
 
-    dec = malloc(sizeof(*dec));
+        keys->enc->instance[j] = instance_keys->enc;
+        keys->dec->instance[j] = instance_keys->dec;
+        free(instance_keys);
+    }
 
-    if (!dec)
-        goto fail;
-
-
-    keys = malloc(sizeof(*keys));
-
-    if (!keys)
-        goto fail;
-
-
-    enc->key0 = keys0->enc;
-    enc->key1 = keys1->enc;
-
-    dec->key0 = keys0->dec;
-    dec->key1 = keys1->dec;
-
-
-    /*
-     * The wrapper now owns the individual keys.
-     * Free only the ZBPRC_Keys containers.
-     */
-
-    free(keys0);
-    free(keys1);
-
-    keys->enc = enc;
-    keys->dec = dec;
+    if (keys->enc == NULL || keys->dec == NULL ||
+        keys->enc->instance[INSTANCES - 1] == NULL) {
+        adapt_free_enc_key(params, keys->enc);
+        adapt_free_dec_key(params, keys->dec);
+        free(keys);
+        return NULL;
+    }
 
     return keys;
-
-
-fail:
-
-    if (keys)
-        free(keys);
-
-    if (dec)
-        free(dec);
-
-    if (enc)
-        free(enc);
-
-    if (keys0)
-        zbprc_free_keys(
-            prc,
-            keys0
-        );
-
-    if (keys1)
-        zbprc_free_keys(
-            prc,
-            keys1
-        );
-
-    return NULL;
 }
 
-
-/*
- * ================================================================
- * Encoding
- * ================================================================
- */
-
-static uint8_t *
-prc1_adapt_encode(
-    const void *params,
-    const MBPRC_EncKey *key,
-    const uint8_t *message,
-    size_t message_bits,
-    RandomnessSource *random,
-    size_t *output_bits)
+/* the message is one bit m; the codeword is an encoding of 1 under instance m */
+static uint8_t *adapt_encode(const void *params_ptr,
+                             const MBPRC_EncKey *enc_key,
+                             const uint8_t *message,
+                             size_t message_bits,
+                             RandomnessSource *random,
+                             size_t *codeword_bits)
 {
-    const PRC1AdaptParams *adapt_params =
-        (const PRC1AdaptParams *)params;
+    const PRC1AdaptParams *params = params_ptr;
 
-    const ZBPRC *prc;
-
-
-    const ZBPRC_EncKey *selected_key;
-
-
-    if (!adapt_params ||
-        !adapt_params->underlying_prc ||
-        !key ||
-        !message ||
-        !random ||
-        !random->rng ||
-        !output_bits)
-    {
+    if (params == NULL || params->underlying_prc == NULL || enc_key == NULL ||
+        message == NULL || message_bits != 1 || random == NULL || codeword_bits == NULL)
         return NULL;
-    }
 
-    if(message_bits!=1){
-        return NULL;
-    }
-
-
-    prc = adapt_params->underlying_prc;
-
-
-    /*
-     * The message is one packed bit.
-     *
-     * Bit value 0 -> use key0.
-     * Bit value 1 -> use key1.
-     */
-
-    if ((message[0] & 1u) == 0)
-        selected_key = key->key0;
-    else
-        selected_key = key->key1;
-
-
-    return zbprc_encode(
-        prc,
-        selected_key,
-        random,
-        output_bits
-    );
+    return zbprc_encode(params->underlying_prc, enc_key->instance[message[0] & 1u], random,
+                        codeword_bits);
 }
 
-
-/*
- * ================================================================
- * Decoding
- * ================================================================
- */
-
-static int
-prc1_adapt_decode(
-    const void *params,
-    const MBPRC_DecKey *key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits,
-    uint8_t *message_out,
-    size_t *message_bits_out)
+static int adapt_decode(const void *params_ptr,
+                        const MBPRC_DecKey *dec_key,
+                        const uint8_t *codeword,
+                        size_t codeword_bits,
+                        uint8_t *message_out,
+                        size_t *message_bits_out)
 {
-    const PRC1AdaptParams *adapt_params =
-        (const PRC1AdaptParams *)params;
+    const PRC1AdaptParams *params = params_ptr;
 
-    const ZBPRC *prc;
-
-    int m0;
-    int m1;
-
-
-    if (!adapt_params ||
-        !adapt_params->underlying_prc ||
-        !key ||
-        !ciphertext ||
-        !message_out ||
-        !message_bits_out)
-    {
+    if (params == NULL || params->underlying_prc == NULL || dec_key == NULL ||
+        codeword == NULL || message_out == NULL || message_bits_out == NULL)
         return 0;
-    }
 
+    const int accepted0 = zbprc_decode(params->underlying_prc, dec_key->instance[0],
+                                       codeword, codeword_bits) == 1;
+    const int accepted1 = zbprc_decode(params->underlying_prc, dec_key->instance[1],
+                                       codeword, codeword_bits) == 1;
 
-    prc = adapt_params->underlying_prc;
+    /* exactly one instance must accept */
+    if (accepted0 == accepted1)
+        return 0;
 
+    message_out[0] = (uint8_t)accepted1;
+    *message_bits_out = 1;
 
-    /*
-     * Decode under both zero-bit PRC keys.
-     */
-
-    m0 = zbprc_decode(
-        prc,
-        key->key0,
-        ciphertext,
-        ciphertext_bits
-    );
-
-    m1 = zbprc_decode(
-        prc,
-        key->key1,
-        ciphertext,
-        ciphertext_bits
-    );
-
-
-    /*
-     * Exactly one decoder must accept.
-     */
-
-    if (m0 == 1 && m1 == 0) {
-
-        message_out[0] = 0;
-        *message_bits_out = 1;
-
-        return 1;
-    }
-
-
-    if (m0 == 0 && m1 == 1) {
-
-        message_out[0] = 1;
-        *message_bits_out = 1;
-
-        return 1;
-    }
-
-
-    /*
-     * Both accept or both reject.
-     */
-
-    return 0;
+    return 1;
 }
 
-
-/*
- * ================================================================
- * Key destruction
- * ================================================================
- */
-
-static void
-prc1_adapt_free_enc_key(
-    const void *params,
-    MBPRC_EncKey *key)
+MBPRC prc1_adapt(const PRC1AdaptParams *params)
 {
-    const PRC1AdaptParams *adapt_params =
-        (const PRC1AdaptParams *)params;
-
-    if (!adapt_params ||
-        !adapt_params->underlying_prc ||
-        !key)
-    {
-        return;
-    }
-
-    const ZBPRC *prc =
-        adapt_params->underlying_prc;
-
-    if (key->key0) {
-        zbprc_free_enc_key(
-            prc,
-            key->key0
-        );
-    }
-
-    if (key->key1) {
-        zbprc_free_enc_key(
-            prc,
-            key->key1
-        );
-    }
-
-    free(key);
-}
-
-
-static void
-prc1_adapt_free_dec_key(
-    const void *params,
-    MBPRC_DecKey *key)
-{
-    const PRC1AdaptParams *adapt_params =
-        (const PRC1AdaptParams *)params;
-
-    if (!adapt_params ||
-        !adapt_params->underlying_prc ||
-        !key)
-    {
-        return;
-    }
-
-    const ZBPRC *prc =
-        adapt_params->underlying_prc;
-
-    if (key->key0) {
-        zbprc_free_dec_key(
-            prc,
-            key->key0
-        );
-    }
-
-    if (key->key1) {
-        zbprc_free_dec_key(
-            prc,
-            key->key1
-        );
-    }
-
-    free(key);
-}
-
-
-MBPRC
-prc1_adapt(
-    const PRC1AdaptParams *params)
-{
-    return (MBPRC) {
+    return (MBPRC){
         .params = params,
-
-        .keygen =
-            prc1_adapt_keygen,
-
-        .encode =
-            prc1_adapt_encode,
-
-        .decode =
-            prc1_adapt_decode,
-
-        .free_enc_key =
-            prc1_adapt_free_enc_key,
-
-        .free_dec_key =
-            prc1_adapt_free_dec_key
+        .block_length = adapt_block_length,
+        .keygen = adapt_keygen,
+        .encode = adapt_encode,
+        .decode = adapt_decode,
+        .free_enc_key = adapt_free_enc_key,
+        .free_dec_key = adapt_free_dec_key,
     };
 }
 
 
 /*
- * ================================================================
- * Anamorphic mode (anamorphic lifting)
- * ================================================================
+ * Anamorphic mode (anamorphic lifting).
  *
- * PRC^1_adapt is a nested PRC with one block (gamma = 1) and J = 2 instances
- * of the underlying zero-bit PRC: Plan(m) = ((m, 1), -). The block is never
- * uniform, so the independent instance `sub` of the lifting construction is
- * only needed by the decoder for the (unused) case x = bottom.
+ * PRC^1_adapt is a nested PRC with one block (gamma = 1) and J = 2 instances of
+ * the underlying zero-bit PRC: Plan(m) = ((m, 1), -), i.e. the block is an
+ * encoding of 1 under instance m. The block is never uniform, so the extra
+ * instance `sub` of the lifting construction is only used by the decoder.
  *
  * The anamorphic message space is {1}: the all-bottom message is excluded.
  */
 
-struct AMBPRC_EncKey {
-    APRC_EncKey *dk[2];
-    ZBPRC_EncKey *sub;
+struct AMBPRC_DoubleKey {
+    AZBPRC_DoubleKey *instance[INSTANCES];   /* dk_j */
+    ZBPRC_EncKey *sub;                       /* enc_key^sub */
 };
 
-struct AMBPRC_DecKey {
-    APRC_DecKey *tk[2];
-    ZBPRC_DecKey *sub;
+struct AMBPRC_TrapdoorKey {
+    AZBPRC_TrapdoorKey *instance[INSTANCES]; /* tk_j */
+    ZBPRC_DecKey *sub;                       /* dec_key^sub */
 };
 
-static size_t
-aprc1_adapt_amessage_bits(
-    const void *params,
-    const void *aparams)
+static size_t aadapt_amessage_bits(const void *params, const void *aparams)
 {
     (void)params;
     (void)aparams;
@@ -453,175 +190,153 @@ aprc1_adapt_amessage_bits(
     return 1;
 }
 
-static void
-aprc1_adapt_free_aenc_key(
-    const void *params,
-    const void *aparams,
-    AMBPRC_EncKey *key)
+static void aadapt_free_double_key(const void *params_ptr, const void *aparams_ptr,
+                                   AMBPRC_DoubleKey *double_key)
 {
-    const PRC1AdaptParams *p = params;
-    const APRC1AdaptParams *ap = aparams;
+    const PRC1AdaptParams *params = params_ptr;
+    const APRC1AdaptParams *aparams = aparams_ptr;
 
-    if (!key)
+    if (double_key == NULL)
         return;
 
-    for (int j = 0; j < 2; ++j) {
-        if (key->dk[j])
-            zbprc_free_enc_akey(p->underlying_prc, ap->underlying_aprc, key->dk[j]);
-    }
+    for (int j = 0; j < INSTANCES; ++j)
+        zbprc_free_double_key(params->underlying_prc, aparams->underlying_aprc,
+                              double_key->instance[j]);
 
-    if (key->sub)
-        zbprc_free_enc_key(p->underlying_prc, key->sub);
+    if (double_key->sub != NULL)
+        zbprc_free_enc_key(params->underlying_prc, double_key->sub);
 
-    free(key);
+    free(double_key);
 }
 
-static void
-aprc1_adapt_free_adec_key(
-    const void *params,
-    const void *aparams,
-    AMBPRC_DecKey *key)
+static void aadapt_free_trapdoor_key(const void *params_ptr, const void *aparams_ptr,
+                                     AMBPRC_TrapdoorKey *trapdoor_key)
 {
-    const PRC1AdaptParams *p = params;
-    const APRC1AdaptParams *ap = aparams;
+    const PRC1AdaptParams *params = params_ptr;
+    const APRC1AdaptParams *aparams = aparams_ptr;
 
-    if (!key)
+    if (trapdoor_key == NULL)
         return;
 
-    for (int j = 0; j < 2; ++j) {
-        if (key->tk[j])
-            zbprc_free_dec_akey(p->underlying_prc, ap->underlying_aprc, key->tk[j]);
-    }
+    for (int j = 0; j < INSTANCES; ++j)
+        zbprc_free_trapdoor_key(params->underlying_prc, aparams->underlying_aprc,
+                                trapdoor_key->instance[j]);
 
-    if (key->sub)
-        zbprc_free_dec_key(p->underlying_prc, key->sub);
+    if (trapdoor_key->sub != NULL)
+        zbprc_free_dec_key(params->underlying_prc, trapdoor_key->sub);
 
-    free(key);
+    free(trapdoor_key);
 }
 
-static AMBPRC_Keys *
-aprc1_adapt_akeygen(
-    const void *params,
-    const void *aparams,
-    MBPRC_Keys *reg_keys,
-    RandomnessSource *random)
+/* aKeyGen: a fresh instance `sub` and (dk_j, tk_j) <- aKeyGen^0 for both instances */
+static AMBPRC_Keys *aadapt_akeygen(const void *params_ptr, const void *aparams_ptr,
+                                   MBPRC_Keys *regular_keys, RandomnessSource *random)
 {
-    const PRC1AdaptParams *p = params;
-    const APRC1AdaptParams *ap = aparams;
-    AMBPRC_Keys *keys = calloc(1, sizeof(*keys));
-    ZBPRC_Keys *sub = NULL;
+    const PRC1AdaptParams *params = params_ptr;
+    const APRC1AdaptParams *aparams = aparams_ptr;
 
-    if (!p || !ap || !p->underlying_prc || !ap->underlying_aprc ||
-        !reg_keys || !random || !keys)
+    if (params == NULL || aparams == NULL || params->underlying_prc == NULL ||
+        aparams->underlying_aprc == NULL || regular_keys == NULL || random == NULL)
+        return NULL;
+
+    AMBPRC_Keys *akeys = calloc(1, sizeof(*akeys));
+    ZBPRC_Keys *sub_keys = NULL;
+
+    if (akeys == NULL)
+        return NULL;
+
+    akeys->double_key = calloc(1, sizeof(*akeys->double_key));
+    akeys->trapdoor_key = calloc(1, sizeof(*akeys->trapdoor_key));
+
+    if (akeys->double_key == NULL || akeys->trapdoor_key == NULL)
         goto fail;
 
-    keys->enc = calloc(1, sizeof(*keys->enc));
-    keys->dec = calloc(1, sizeof(*keys->dec));
+    sub_keys = zbprc_keygen(params->underlying_prc, random);
 
-    if (!keys->enc || !keys->dec)
+    if (sub_keys == NULL)
         goto fail;
 
-    /* independent instance for blocks that are uniform in the regular code */
-    sub = zbprc_keygen(p->underlying_prc, random);
-    if (!sub)
-        goto fail;
+    akeys->double_key->sub = sub_keys->enc;
+    akeys->trapdoor_key->sub = sub_keys->dec;
+    free(sub_keys);
 
-    keys->enc->sub = sub->enc;
-    keys->dec->sub = sub->dec;
-    free(sub);
-
-    for (int j = 0; j < 2; ++j) {
-        ZBPRC_Keys regular = {
-            .enc = j ? reg_keys->enc->key1 : reg_keys->enc->key0,
-            .dec = j ? reg_keys->dec->key1 : reg_keys->dec->key0,
+    for (int j = 0; j < INSTANCES; ++j) {
+        ZBPRC_Keys instance_keys = {
+            .enc = regular_keys->enc->instance[j],
+            .dec = regular_keys->dec->instance[j],
         };
-        APRC_Keys *ak = zbprc_akeygen(p->underlying_prc, ap->underlying_aprc,
-                                      &regular, random);
+        AZBPRC_Keys *instance_akeys = zbprc_akeygen(params->underlying_prc,
+                                                    aparams->underlying_aprc,
+                                                    &instance_keys, random);
 
-        if (!ak)
+        if (instance_akeys == NULL)
             goto fail;
 
-        keys->enc->dk[j] = ak->enc;
-        keys->dec->tk[j] = ak->dec;
-        free(ak);
+        akeys->double_key->instance[j] = instance_akeys->double_key;
+        akeys->trapdoor_key->instance[j] = instance_akeys->trapdoor_key;
+        free(instance_akeys);
     }
 
-    return keys;
+    return akeys;
 
 fail:
-    if (keys) {
-        aprc1_adapt_free_aenc_key(params, aparams, keys->enc);
-        aprc1_adapt_free_adec_key(params, aparams, keys->dec);
-        free(keys);
-    }
+    aadapt_free_double_key(params, aparams, akeys->double_key);
+    aadapt_free_trapdoor_key(params, aparams, akeys->trapdoor_key);
+    free(akeys);
 
     return NULL;
 }
 
-static uint8_t *
-aprc1_adapt_aencode(
-    const void *params,
-    const void *aparams,
-    const MBPRC_EncKey *reg_key,
-    const AMBPRC_EncKey *dkey,
-    const uint8_t *message,
-    size_t message_bits,
-    const uint8_t *amessage,
-    RandomnessSource *random,
-    size_t *output_bits)
+/* aEncode^0 under instance m; the anamorphic message must be 1 */
+static uint8_t *aadapt_aencode(const void *params_ptr,
+                               const void *aparams_ptr,
+                               const MBPRC_EncKey *enc_key,
+                               const AMBPRC_DoubleKey *double_key,
+                               const uint8_t *message,
+                               size_t message_bits,
+                               const uint8_t *amessage,
+                               RandomnessSource *random,
+                               size_t *codeword_bits)
 {
-    const PRC1AdaptParams *p = params;
-    const APRC1AdaptParams *ap = aparams;
+    const PRC1AdaptParams *params = params_ptr;
+    const APRC1AdaptParams *aparams = aparams_ptr;
 
-    if (!p || !ap || !reg_key || !dkey || !message || !amessage ||
-        !random || !output_bits || message_bits != 1)
-        return NULL;
-
-    /* the only valid anamorphic message is 1 */
-    if ((amessage[0] & 1u) == 0)
+    if (params == NULL || aparams == NULL || enc_key == NULL || double_key == NULL ||
+        message == NULL || message_bits != 1 || amessage == NULL || (amessage[0] & 1u) == 0 ||
+        random == NULL || codeword_bits == NULL)
         return NULL;
 
     const int j = message[0] & 1u;
 
-    return zbprc_aencode(
-        p->underlying_prc,
-        ap->underlying_aprc,
-        j ? reg_key->key1 : reg_key->key0,
-        dkey->dk[j],
-        random,
-        output_bits);
+    return zbprc_aencode(params->underlying_prc, aparams->underlying_aprc,
+                         enc_key->instance[j], double_key->instance[j], random,
+                         codeword_bits);
 }
 
-static int
-aprc1_adapt_adecode(
-    const void *params,
-    const void *aparams,
-    const MBPRC_DecKey *reg_key,
-    const AMBPRC_DecKey *tkey,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits,
-    uint8_t *amessage_out)
+/* aDecode: aDecode^0 of both instances, then Decode^0 with dec_key^sub */
+static int aadapt_adecode(const void *params_ptr,
+                          const void *aparams_ptr,
+                          const MBPRC_DecKey *dec_key,
+                          const AMBPRC_TrapdoorKey *trapdoor_key,
+                          const uint8_t *codeword,
+                          size_t codeword_bits,
+                          uint8_t *amessage_out)
 {
-    const PRC1AdaptParams *p = params;
-    const APRC1AdaptParams *ap = aparams;
+    const PRC1AdaptParams *params = params_ptr;
+    const APRC1AdaptParams *aparams = aparams_ptr;
     int present = 0;
 
-    if (!p || !ap || !reg_key || !tkey || !ciphertext || !amessage_out)
+    if (params == NULL || aparams == NULL || dec_key == NULL || trapdoor_key == NULL ||
+        codeword == NULL || amessage_out == NULL)
         return 0;
 
-    for (int j = 0; j < 2 && !present; ++j) {
-        present = zbprc_adecode(
-            p->underlying_prc,
-            ap->underlying_aprc,
-            j ? reg_key->key1 : reg_key->key0,
-            tkey->tk[j],
-            ciphertext,
-            ciphertext_bits) == 1;
-    }
+    for (int j = 0; j < INSTANCES && !present; ++j)
+        present = zbprc_adecode(params->underlying_prc, aparams->underlying_aprc,
+                                dec_key->instance[j], trapdoor_key->instance[j],
+                                codeword, codeword_bits) == 1;
 
-    /* blocks that are uniform in the regular code would be read with `sub` */
     present = present ||
-        zbprc_decode(p->underlying_prc, tkey->sub, ciphertext, ciphertext_bits) == 1;
+        zbprc_decode(params->underlying_prc, trapdoor_key->sub, codeword, codeword_bits) == 1;
 
     if (present)
         amessage_out[0] = 1;
@@ -629,17 +344,15 @@ aprc1_adapt_adecode(
     return present;
 }
 
-aMBPRC
-aprc1_adapt(
-    const APRC1AdaptParams *aparams)
+aMBPRC aprc1_adapt(const APRC1AdaptParams *aparams)
 {
-    return (aMBPRC) {
+    return (aMBPRC){
         .aparams = aparams,
-        .amessage_bits = aprc1_adapt_amessage_bits,
-        .akeygen = aprc1_adapt_akeygen,
-        .aencode = aprc1_adapt_aencode,
-        .adecode = aprc1_adapt_adecode,
-        .free_aenc_key = aprc1_adapt_free_aenc_key,
-        .free_adec_key = aprc1_adapt_free_adec_key,
+        .amessage_bits = aadapt_amessage_bits,
+        .akeygen = aadapt_akeygen,
+        .aencode = aadapt_aencode,
+        .adecode = aadapt_adecode,
+        .free_double_key = aadapt_free_double_key,
+        .free_trapdoor_key = aadapt_free_trapdoor_key,
     };
 }

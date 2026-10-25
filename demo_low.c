@@ -6,51 +6,55 @@
 #include "prcs/multibit/implementations/prc_low.h"
 
 static const DemoParamSpec specs[] = {
-    DEMO_LDPC_SPECS("1024", "256", "512", "10", "0.01"),
+    DEMO_LDPC_SPECS_LARGE,
     {"ell", "40", "message length in bits"},
     {NULL, NULL, NULL}
 };
 
 typedef struct {
     LDPCParams ldpc;
-    ZBPRC underlying;
-    PRCLow_Params low;
     A_LDPCParams ldpc_aparams;
-    aZBPRC azb;
+    ZBPRC underlying;
+    aZBPRC underlying_aprc;
+    PRCLow_Params low;
     APRCLow_Params alow;
-    aMBPRC lift;
+    aMBPRC lifting;
 } Storage;
 
 static void *low_open(const DemoParams *params, const DemoKeys *keys)
 {
-    DemoPrc *p = demo_prc_new(sizeof(Storage));
-    Storage *s;
+    DemoPrc *prc = demo_prc_new(sizeof(Storage));
 
-    if (p == NULL)
+    if (prc == NULL)
         return NULL;
 
-    s = p->storage;
-    s->ldpc = demo_ldpc_params(params);
-    s->underlying = prc_ldpc(&s->ldpc);
-    s->low = (PRCLow_Params){
-        .underlying = &s->underlying,
-        .ell = demo_param_size(params, "ell"),
-    };
+    Storage *storage = prc->storage;
 
-    s->azb = aprc_ldpc(&s->ldpc_aparams);
-    s->alow = (APRCLow_Params){.underlying_aprc = &s->azb};
-    s->lift = aprc_low(&s->alow);
-
-    p->mb = prc_low(&s->low);
-    p->lift = &s->lift;
-    p->message_bits = s->low.ell;
-
-    if (demo_prc_finish(p, keys) != 0) {
-        demo_prc_close(p);
+    if (demo_ldpc_params(params, &storage->ldpc, &storage->ldpc_aparams) != 0) {
+        demo_prc_close(prc);
         return NULL;
     }
 
-    return p;
+    storage->underlying = prc_ldpc(&storage->ldpc);
+    storage->low = (PRCLow_Params){
+        .underlying = &storage->underlying,
+        .ell = demo_param_size(params, "ell"),
+    };
+
+    storage->underlying_aprc = aprc_ldpc(&storage->ldpc_aparams);
+    storage->alow = (APRCLow_Params){.underlying_aprc = &storage->underlying_aprc};
+    storage->lifting = aprc_low(&storage->alow);
+
+    prc->multibit_prc = prc_low(&storage->low);
+    prc->lifting = &storage->lifting;
+    prc->message_bits = storage->low.ell;
+
+    if (demo_prc_finish(prc, keys) != 0) {
+        demo_prc_close(prc);
+        return NULL;
+    }
+
+    return prc;
 }
 
 /* exported so that the benchmark can use the code without its main */

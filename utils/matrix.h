@@ -8,69 +8,63 @@
 
 #include "random.h"
 
-/* a vector in F_2^bits, bit i = bit i % 64 of data[i / 64] */
+/* a vector in F_2^bits, bit i = bit i % 64 of data[i / 64]; bits above `bits` are zero */
 typedef struct {
     size_t bits;
     size_t words;
     uint64_t *data;
 } BitVector;
 
-/* an n x g matrix, stored as its g columns */
+/* a rows x cols matrix, stored as its cols column vectors (each of F_2^rows) */
 typedef struct {
-    size_t n;
-    size_t g;
+    size_t rows;
+    size_t cols;
     BitVector *columns;
-} PackedG;
+} ColumnMatrix;
 
-/* an r x n matrix with exactly t ones per row (their column indices) */
+/* a rows x cols matrix with exactly row_weight ones per row, stored as their column indices */
 typedef struct {
-    size_t r;
-    size_t n;
-    size_t t;
-    size_t *positions;
-} SparseP;
-
-/* a basis of a subspace */
-typedef struct {
-    size_t dimension;
-    BitVector *vectors;
-} KernelBasis;
-
-SparseP sparse_p_alloc(size_t r, size_t n, size_t t);
-void sparse_p_free(SparseP *P);
+    size_t rows;
+    size_t cols;
+    size_t row_weight;
+    size_t *positions;    /* row i: positions[i * row_weight .. (i + 1) * row_weight) */
+} SparseMatrix;
 
 BitVector bitvector_alloc(size_t bits);
 void bitvector_free(BitVector *v);
-void bitvector_zero(BitVector *v);
 size_t bitvector_weight(const BitVector *v);
-uint8_t bit_get(const BitVector *v, size_t index);
-void bit_set(BitVector *v, size_t index, uint8_t value);
+void bitvector_set_bit(BitVector *v, size_t index, uint8_t value);
 
-/* y = P x */
-void sparse_p_mul(const SparseP *P, const BitVector *x, BitVector *y);
+/* dst += src (dst and src have the same length) */
+void bitvector_add(BitVector *dst, const BitVector *src);
 
-PackedG packed_g_alloc(size_t n, size_t g);
-void packed_g_free(PackedG *G);
+/* conversion from and to packed bytes (bit i = bit i % 8 of byte i / 8) */
+void bitvector_from_bytes(BitVector *v, const uint8_t *bytes);
+uint8_t *bitvector_to_bytes(const BitVector *v);
 
-/* result = G s */
-void packed_g_mul(const PackedG *G, const BitVector *s, BitVector *result);
+SparseMatrix sparse_matrix_alloc(size_t rows, size_t cols, size_t row_weight);
+void sparse_matrix_free(SparseMatrix *M);
 
-/* P G */
-PackedG sparse_p_mul_packed_g(const SparseP *P, const PackedG *G);
+/* Samples every row uniformly among the vectors of weight row_weight (the set S_{t,rows,cols}). */
+void sparse_matrix_sample(SparseMatrix *M, RandomnessSource *random);
 
-/* basis of ker P */
-KernelBasis sparse_p_kernel(const SparseP *P);
+/* y = M x */
+void sparse_matrix_mul_vector(const SparseMatrix *M, const BitVector *x, BitVector *y);
 
-/* basis of ker M = { s : M s = 0 } for M given by its columns */
-KernelBasis packed_g_kernel(const PackedG *M);
+ColumnMatrix column_matrix_alloc(size_t rows, size_t cols);
+void column_matrix_free(ColumnMatrix *M);
 
-/* n x count matrix of independent, uniformly random elements of span(K) */
-PackedG kernel_random_span(const KernelBasis *K, size_t n, size_t count,
-                           RandomnessSource *random);
+/* y = M x */
+void column_matrix_mul_vector(const ColumnMatrix *M, const BitVector *x, BitVector *y);
 
-void kernel_basis_free(KernelBasis *K);
+/* the product P M of a sparse and a column matrix */
+ColumnMatrix sparse_matrix_mul_column_matrix(const SparseMatrix *P, const ColumnMatrix *M);
 
-/* the basis vectors (of F_2^n) as the columns of a matrix */
-PackedG kernel_basis_to_packed_g(const KernelBasis *K, size_t n);
+/* a basis of ker M = { x : M x = 0 } as the columns of a M.cols x dim ker M matrix */
+ColumnMatrix column_matrix_kernel(const ColumnMatrix *M);
+
+/* P.cols x count matrix whose columns are independent, uniform elements of ker P */
+ColumnMatrix sparse_matrix_sample_kernel(const SparseMatrix *P, size_t count,
+                                         RandomnessSource *random);
 
 #endif /* MATRIX_H */

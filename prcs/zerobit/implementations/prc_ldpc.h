@@ -1,42 +1,25 @@
 #ifndef PRC_LDPC_H
 #define PRC_LDPC_H
 
-#include "../zerobit_prc.h"
-#include "../../../utils/matrix.h"
+/*
+ * The zero-bit PRC PRC_ldpc = LDPC-PRC_0[n, g, t, r, eta, r^(-1/4)] of Christ and
+ * Gunn (see prc_ldpc.c). Parameters satisfying the requirements of the thesis are
+ * computed by ldpc_admissible_choice (aprc_ldpc.h).
+ */
 
 #include <stddef.h>
 
-/*
- * ================================================================
- * LDPC parameters
- * ================================================================
- */
+#include "../zerobit_prc.h"
 
 typedef struct {
-    size_t n;
-    size_t r;
-    size_t g;
-    size_t t;
-    double eta;
+    size_t n;      /* block length (the security parameter lambda = n) */
+    size_t g;      /* columns of the generator matrix G (length of the LPN secret) */
+    size_t t;      /* sparsity: ones per row of the parity-check matrix P */
+    size_t r;      /* rows of P (parity checks) */
+    double eta;    /* noise rate of the encoder, e <- Ber(n, eta) */
 } LDPCParams;
 
-
-/*
-    utility: (anamorphic implementation can use the same function)
-*/
-void sample_sparse_p(RandomnessSource *random,
-                            SparseP *P);
-
-
-/*
- * ================================================================
- * LDPC PRC constructor
- * ================================================================
- */
-
-ZBPRC
-prc_ldpc(
-    const LDPCParams *params
-);
+/* The LDPC zero-bit PRC (the parameters must outlive it). */
+ZBPRC prc_ldpc(const LDPCParams *params);
 
 #endif /* PRC_LDPC_H */

@@ -16,7 +16,7 @@
  *
  * Returns 0 on success, -1 on error.
  */
-int encrypt(
+int ske_encrypt(
     const uint8_t *key,
     size_t nonce_len,
     const uint8_t *message,
@@ -25,7 +25,7 @@ int encrypt(
 );
 
 /*
- * Decrypt a ciphertext produced by encrypt().
+ * Decrypt a ciphertext produced by ske_encrypt().
  *
  * message_len must be supplied separately because the ciphertext
  * does not encode the actual message length. The ciphertext buffer must
@@ -33,7 +33,7 @@ int encrypt(
  *
  * Returns 0 on success, -1 on error.
  */
-int decrypt(
+int ske_decrypt(
     const uint8_t *key,
     size_t nonce_len,
     const uint8_t *ciphertext,

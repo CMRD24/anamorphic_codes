@@ -45,14 +45,14 @@ typedef struct {
     char values[DEMO_MAX_PARAMS][64];
 } DemoParams;
 
-/* fills p with the default values of specs */
-void demo_params_defaults(DemoParams *p, const DemoParamSpec *specs);
+/* fills params with the default values of specs */
+void demo_params_defaults(DemoParams *params, const DemoParamSpec *specs);
 /* sets a parameter; -1 (after a message) if the name is unknown or the value too long */
-int demo_params_set(DemoParams *p, const char *name, const char *value);
+int demo_params_set(DemoParams *params, const char *name, const char *value);
 
-const char *demo_param(const DemoParams *p, const char *name);
-size_t demo_param_size(const DemoParams *p, const char *name);
-double demo_param_double(const DemoParams *p, const char *name);
+const char *demo_param(const DemoParams *params, const char *name);
+size_t demo_param_size(const DemoParams *params, const char *name);
+double demo_param_double(const DemoParams *params, const char *name);
 
 /* ---- keys ------------------------------------------------------------- */
 
@@ -75,16 +75,16 @@ typedef struct {
 } DemoCiphertext;
 
 /* allocates count codewords of the given size (zeroed) */
-int demo_ct_alloc(DemoCiphertext *ct, size_t count, size_t bits);
-void demo_ct_free(DemoCiphertext *ct);
+int demo_ct_alloc(DemoCiphertext *ciphertext, size_t count, size_t bits);
+void demo_ct_free(DemoCiphertext *ciphertext);
 
 /* ---- messages --------------------------------------------------------- */
 
-/* copies s into buf, zero-padded; -1 if s is longer than len */
-int demo_pad_message(const char *s, uint8_t *buf, size_t len);
+/* copies text into buffer, zero-padded; -1 if text is longer than len */
+int demo_pad_message(const char *text, uint8_t *buffer, size_t len);
 
 /* prints bytes as text (trailing zeros trimmed), or as hex if not printable */
-void demo_print_bytes(const char *label, const uint8_t *buf, size_t len);
+void demo_print_bytes(const char *label, const uint8_t *buffer, size_t len);
 
 /* ---- a code ----------------------------------------------------------- */
 

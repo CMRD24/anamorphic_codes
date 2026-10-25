@@ -6,47 +6,51 @@
 #include "prcs/multibit/implementations/prc1_adapt.h"
 
 static const DemoParamSpec specs[] = {
-    DEMO_LDPC_SPECS("1024", "256", "512", "10", "0.01"),
+    DEMO_LDPC_SPECS_LARGE,
     {NULL, NULL, NULL}
 };
 
 typedef struct {
     LDPCParams ldpc;
-    ZBPRC underlying;
-    PRC1AdaptParams adapt;
     A_LDPCParams ldpc_aparams;
-    aZBPRC azb;
+    ZBPRC underlying;
+    aZBPRC underlying_aprc;
+    PRC1AdaptParams adapt;
     APRC1AdaptParams aadapt;
-    aMBPRC lift;
+    aMBPRC lifting;
 } Storage;
 
 static void *adapt_open(const DemoParams *params, const DemoKeys *keys)
 {
-    DemoPrc *p = demo_prc_new(sizeof(Storage));
-    Storage *s;
+    DemoPrc *prc = demo_prc_new(sizeof(Storage));
 
-    if (p == NULL)
+    if (prc == NULL)
         return NULL;
 
-    s = p->storage;
-    s->ldpc = demo_ldpc_params(params);
-    s->underlying = prc_ldpc(&s->ldpc);
-    s->adapt = (PRC1AdaptParams){.underlying_prc = &s->underlying};
+    Storage *storage = prc->storage;
 
-    s->azb = aprc_ldpc(&s->ldpc_aparams);
-    s->aadapt = (APRC1AdaptParams){.underlying_aprc = &s->azb};
-    s->lift = aprc1_adapt(&s->aadapt);
-
-    p->mb = prc1_adapt(&s->adapt);
-    p->lift = &s->lift;
-    p->message_bits = 1;
-
-    if (demo_prc_finish(p, keys) != 0) {
-        demo_prc_close(p);
+    if (demo_ldpc_params(params, &storage->ldpc, &storage->ldpc_aparams) != 0) {
+        demo_prc_close(prc);
         return NULL;
     }
 
-    return p;
+    storage->underlying = prc_ldpc(&storage->ldpc);
+    storage->adapt = (PRC1AdaptParams){.underlying_prc = &storage->underlying};
+
+    storage->underlying_aprc = aprc_ldpc(&storage->ldpc_aparams);
+    storage->aadapt = (APRC1AdaptParams){.underlying_aprc = &storage->underlying_aprc};
+    storage->lifting = aprc1_adapt(&storage->aadapt);
+
+    prc->multibit_prc = prc1_adapt(&storage->adapt);
+    prc->lifting = &storage->lifting;
+    prc->message_bits = 1;
+
+    if (demo_prc_finish(prc, keys) != 0) {
+        demo_prc_close(prc);
+        return NULL;
+    }
+
+    return prc;
 }
 
 /* exported so that the benchmark can use the code without its main */

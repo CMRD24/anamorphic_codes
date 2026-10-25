@@ -9,11 +9,11 @@ target_link_libraries(test_prc_zerobit PRIVATE prc_ldpc_impl prc_pp_impl prc_dc_
 add_test(NAME prc_zerobit COMMAND test_prc_zerobit)
 
 add_executable(test_prc_multibit test_prc_multibit.c)
-target_link_libraries(test_prc_multibit PRIVATE prc_cca_impl prc_high_impl prc_sharp_impl prc1_adapt_impl)
+target_link_libraries(test_prc_multibit PRIVATE prc_reencode_impl prc_high_impl prc1_adapt_impl)
 add_test(NAME prc_multibit COMMAND test_prc_multibit)
 
 add_executable(test_aprc_rr test_aprc_rr.c)
-target_link_libraries(test_aprc_rr PRIVATE prc_cca_impl prc_pp_impl)
+target_link_libraries(test_aprc_rr PRIVATE prc_reencode_impl prc_pp_impl)
 add_test(NAME aprc_rr COMMAND test_aprc_rr)
 
 find_package(OpenSSL)

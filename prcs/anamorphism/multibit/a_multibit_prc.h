@@ -10,81 +10,69 @@
  * has one bit per block: bit i = 1 hides the zero-bit anamorphic message in
  * block i, bit i = 0 leaves the block regular. The all-zero message means "no
  * anamorphic message" and is not a valid anamorphic message.
+ *
+ * Every implementation defines its own struct AMBPRC_DoubleKey / AMBPRC_TrapdoorKey.
  */
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "../../../utils/random.h"
 #include "../../multibit/multibit_prc.h"
 
-typedef struct AMBPRC_EncKey AMBPRC_EncKey;
-typedef struct AMBPRC_DecKey AMBPRC_DecKey;
+typedef struct AMBPRC_DoubleKey AMBPRC_DoubleKey;
+typedef struct AMBPRC_TrapdoorKey AMBPRC_TrapdoorKey;
 
 typedef struct {
-    AMBPRC_EncKey *enc;   /* double key */
-    AMBPRC_DecKey *dec;   /* trapdoor key */
+    AMBPRC_DoubleKey *double_key;
+    AMBPRC_TrapdoorKey *trapdoor_key;
 } AMBPRC_Keys;
 
 typedef struct {
+    /* implementation-specific anamorphic parameters */
     const void *aparams;
 
     /* gamma: number of bits of the anamorphic message */
-    size_t (*amessage_bits)(
-        const void *params,
-        const void *aparams
-    );
+    size_t (*amessage_bits)(const void *params, const void *aparams);
 
-    /* Needs the regular keys of the PRC. */
-    AMBPRC_Keys *(*akeygen)(
-        const void *params,
-        const void *aparams,
-        MBPRC_Keys *reg_keys,
-        RandomnessSource *random
-    );
+    /* needs the regular keys of the PRC; NULL on error */
+    AMBPRC_Keys *(*akeygen)(const void *params,
+                            const void *aparams,
+                            MBPRC_Keys *regular_keys,
+                            RandomnessSource *random);
 
     /*
      * Encodes `message` and hides `amessage` (packed bits, LSB first,
      * amessage_bits() bits, not all zero). Returns a newly allocated codeword,
      * NULL on error.
      */
-    uint8_t *(*aencode)(
-        const void *params,
-        const void *aparams,
-        const MBPRC_EncKey *reg_key,
-        const AMBPRC_EncKey *dkey,
-        const uint8_t *message,
-        size_t message_bits,
-        const uint8_t *amessage,
-        RandomnessSource *random,
-        size_t *output_bits
-    );
+    uint8_t *(*aencode)(const void *params,
+                        const void *aparams,
+                        const MBPRC_EncKey *enc_key,
+                        const AMBPRC_DoubleKey *double_key,
+                        const uint8_t *message,
+                        size_t message_bits,
+                        const uint8_t *amessage,
+                        RandomnessSource *random,
+                        size_t *codeword_bits);
 
     /*
      * Returns 1 and writes amessage_bits() bits to amessage_out if an
      * anamorphic message is present, 0 otherwise.
      */
-    int (*adecode)(
-        const void *params,
-        const void *aparams,
-        const MBPRC_DecKey *reg_key,
-        const AMBPRC_DecKey *tkey,
-        const uint8_t *ciphertext,
-        size_t ciphertext_bits,
-        uint8_t *amessage_out
-    );
+    int (*adecode)(const void *params,
+                   const void *aparams,
+                   const MBPRC_DecKey *dec_key,
+                   const AMBPRC_TrapdoorKey *trapdoor_key,
+                   const uint8_t *codeword,
+                   size_t codeword_bits,
+                   uint8_t *amessage_out);
 
-    void (*free_aenc_key)(
-        const void *params,
-        const void *aparams,
-        AMBPRC_EncKey *key
-    );
-
-    void (*free_adec_key)(
-        const void *params,
-        const void *aparams,
-        AMBPRC_DecKey *key
-    );
+    void (*free_double_key)(const void *params, const void *aparams,
+                            AMBPRC_DoubleKey *double_key);
+    void (*free_trapdoor_key)(const void *params, const void *aparams,
+                              AMBPRC_TrapdoorKey *trapdoor_key);
 } aMBPRC;
 
 
@@ -95,41 +83,44 @@ mbprc_amessage_bits(const MBPRC *prc, const aMBPRC *aprc)
 }
 
 static inline AMBPRC_Keys *
-mbprc_akeygen(const MBPRC *prc, const aMBPRC *aprc, MBPRC_Keys *keys,
+mbprc_akeygen(const MBPRC *prc, const aMBPRC *aprc, MBPRC_Keys *regular_keys,
               RandomnessSource *random)
 {
-    return aprc->akeygen(prc->params, aprc->aparams, keys, random);
+    return aprc->akeygen(prc->params, aprc->aparams, regular_keys, random);
 }
 
 static inline uint8_t *
-mbprc_aencode(const MBPRC *prc, const aMBPRC *aprc, const MBPRC_EncKey *key,
-              const AMBPRC_EncKey *dkey, const uint8_t *message,
+mbprc_aencode(const MBPRC *prc, const aMBPRC *aprc, const MBPRC_EncKey *enc_key,
+              const AMBPRC_DoubleKey *double_key, const uint8_t *message,
               size_t message_bits, const uint8_t *amessage,
-              RandomnessSource *random, size_t *output_bits)
+              RandomnessSource *random, size_t *codeword_bits)
 {
-    return aprc->aencode(prc->params, aprc->aparams, key, dkey, message,
-                         message_bits, amessage, random, output_bits);
+    return aprc->aencode(prc->params, aprc->aparams, enc_key, double_key, message,
+                         message_bits, amessage, random, codeword_bits);
 }
 
 static inline int
-mbprc_adecode(const MBPRC *prc, const aMBPRC *aprc, const MBPRC_DecKey *key,
-              const AMBPRC_DecKey *tkey, const uint8_t *ciphertext,
-              size_t ciphertext_bits, uint8_t *amessage_out)
+mbprc_adecode(const MBPRC *prc, const aMBPRC *aprc, const MBPRC_DecKey *dec_key,
+              const AMBPRC_TrapdoorKey *trapdoor_key, const uint8_t *codeword,
+              size_t codeword_bits, uint8_t *amessage_out)
 {
-    return aprc->adecode(prc->params, aprc->aparams, key, tkey, ciphertext,
-                         ciphertext_bits, amessage_out);
+    return aprc->adecode(prc->params, aprc->aparams, dec_key, trapdoor_key, codeword,
+                         codeword_bits, amessage_out);
 }
 
 static inline void
-mbprc_free_aenc_key(const MBPRC *prc, const aMBPRC *aprc, AMBPRC_EncKey *key)
+mbprc_free_akeys(const MBPRC *prc, const aMBPRC *aprc, AMBPRC_Keys *akeys)
 {
-    aprc->free_aenc_key(prc->params, aprc->aparams, key);
-}
+    if (akeys == NULL)
+        return;
 
-static inline void
-mbprc_free_adec_key(const MBPRC *prc, const aMBPRC *aprc, AMBPRC_DecKey *key)
-{
-    aprc->free_adec_key(prc->params, aprc->aparams, key);
+    if (akeys->double_key != NULL)
+        aprc->free_double_key(prc->params, aprc->aparams, akeys->double_key);
+
+    if (akeys->trapdoor_key != NULL)
+        aprc->free_trapdoor_key(prc->params, aprc->aparams, akeys->trapdoor_key);
+
+    free(akeys);
 }
 
 #endif /* A_MULTIBIT_PRC_H */

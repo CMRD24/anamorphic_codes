@@ -24,19 +24,19 @@ typedef struct {
 
 typedef struct {
     unsigned n;          /* extension degree over GF(2) */
-    unsigned nw;         /* words in use */
+    unsigned words;         /* words in use */
     gf_elem_t f_low;     /* defining polynomial without the x^N term */
 } gf_field_t;
 
 /* returns 0 on success, -1 if n is out of range [2, GF_MAX_BITS] */
-int gf_field_init(gf_field_t *F, unsigned n);
+int gf_field_init(gf_field_t *field, unsigned n);
 
 void gf_zero(gf_elem_t *a);
 int gf_is_zero(const gf_elem_t *a);
-void gf_add(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b);
-void gf_mul(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b);
-void gf_inv(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a);
-int gf_equal(const gf_field_t *F, const gf_elem_t *a, const gf_elem_t *b);
+void gf_add(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b);
+void gf_mul(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b);
+void gf_inv(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a);
+int gf_equal(const gf_field_t *field, const gf_elem_t *a, const gf_elem_t *b);
 
 /* symbol access (m bits per symbol) */
 uint32_t gf_get_symbol(const gf_elem_t *a, size_t i, unsigned m);
@@ -45,14 +45,14 @@ void gf_set_symbol(gf_elem_t *a, size_t i, unsigned m, uint32_t v);
 /*
  * Reed-Solomon over E: polynomial P = sum_{i<k} coeffs[i] X^i.
  */
-void gf_poly_eval(const gf_field_t *F, gf_elem_t *r,
+void gf_poly_eval(const gf_field_t *field, gf_elem_t *r,
                   const gf_elem_t *coeffs, size_t k, const gf_elem_t *x);
 
 /*
  * Interpolate the unique polynomial of degree < k through k points with
  * pairwise distinct xs. Returns 0, or -1 on allocation failure / repeated x.
  */
-int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
+int gf_poly_interpolate(const gf_field_t *field, gf_elem_t *coeffs,
                         const gf_elem_t *xs, const gf_elem_t *ys, size_t k);
 
 #endif /* GF_EXT_H */

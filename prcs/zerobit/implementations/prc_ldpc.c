@@ -3,10 +3,10 @@
  * (the LDPC based construction of M. Christ and S. Gunn, "Pseudorandom
  * Error-Correcting Codes", CRYPTO 2024).
  *
- * Keys. A sparse parity-check matrix P (r x n, exactly t ones per row), a
- * generator matrix G (n x g) whose columns are uniform elements of ker P, so
- * P G = 0, and a one-time pad z in F_2^n. The encoding key is (G, z), the
- * decoding key (P, z).
+ * Keys. (P, G) <- LDPC[n, g, t, r]: a sparse parity-check matrix P (r x n,
+ * exactly t ones per row) and a generator matrix G (n x g) whose columns are
+ * independent, uniform elements of ker P, so P G = 0; a one-time pad
+ * z <- F_2^n. The encoding key is (G, z), the decoding key (P, z).
  *
  * Encode: c = G s + z + e with s uniform in F_2^g and e ~ Ber(n, eta) (each
  * coordinate 1 with probability eta). Under the learning-parity-with-noise (LPN)
@@ -22,478 +22,184 @@
  * channel adds noise as long as the total noise rate is a constant below 1/2.
  */
 
-#include "../zerobit_prc.h"
 #include "prc_ldpc.h"
+#include "prc_ldpc_internal.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include <limits.h>
-#include <stdint.h>
 
 #include "../../../utils/matrix.h"
 #include "../../../utils/random_utils.h"
 
-/* Is col among the first `placed` positions of the row? */
-static int sparse_row_contains(const SparseP *P,
-                               size_t row,
-                               size_t placed,
-                               size_t col)
-{
-    size_t base =
-        row * P->t;
 
-    for (size_t j = 0;
-         j < placed;
-         ++j) {
-
-        if (P->positions[base + j] == col)
-            return 1;
-    }
-
-    return 0;
-}
-
-
-/*
- * Samples P uniformly among the matrices with t ones in every row: for each row, t
- * distinct column positions are drawn by rejection of repeats.
- */
-void sample_sparse_p(RandomnessSource *random,
-                            SparseP *P)
-{
-    for (size_t row = 0;
-         row < P->r;
-         ++row) {
-
-        size_t placed = 0;
-
-        while (placed < P->t) {
-
-            size_t col =
-                random_bounded(random,
-                               P->n);
-
-            if (!sparse_row_contains(P,
-                                     row,
-                                     placed,
-                                     col)) {
-
-                P->positions[
-                    row * P->t + placed
-                ] = col;
-
-                ++placed;
-            }
-        }
-    }
-}
-
-
-/*
- * ================================================================
- * Opaque key structures
- * ================================================================
- */
-
-struct ZBPRC_EncKey {
-    PackedG G;
-    BitVector z;
-};
-
-
-struct ZBPRC_DecKey {
-    SparseP P;
-    BitVector z;
-};
-
-
-/*
- * ================================================================
- * Key destruction
- * ================================================================
- */
-
-void ldpc_free_enc_key(const void *params, ZBPRC_EncKey *key)
+static void ldpc_free_enc_key(const void *params, ZBPRC_EncKey *enc_key)
 {
     (void)params;
-    if (key == NULL)
+
+    if (enc_key == NULL)
         return;
 
-    packed_g_free(&key->G);
-    bitvector_free(&key->z);
-
-    free(key);
+    column_matrix_free(&enc_key->G);
+    bitvector_free(&enc_key->z);
+    free(enc_key);
 }
 
-
-void ldpc_free_dec_key(const void *params, ZBPRC_DecKey *key)
+static void ldpc_free_dec_key(const void *params, ZBPRC_DecKey *dec_key)
 {
     (void)params;
-    if (key == NULL)
+
+    if (dec_key == NULL)
         return;
 
-    sparse_p_free(&key->P);
-    bitvector_free(&key->z);
-
-    free(key);
+    sparse_matrix_free(&dec_key->P);
+    bitvector_free(&dec_key->z);
+    free(dec_key);
 }
 
-/*
- * Codeword length n in bits.
- */
-size_t
-ldpc_blocksize(const void *params_ptr){
-    const LDPCParams *params =
-        (const LDPCParams *)params_ptr;
-    return params->n;
-}
-
-
-/*
- * Key generation: samples P, computes a basis of ker P, draws every column of G as a
- * uniform element of ker P (a random combination of the basis vectors, computed as
- * one matrix product) and the pad z. Fails if dim ker P < g.
- */
-ZBPRC_Keys *
-ldpc_keygen(const void *params_ptr,
-            RandomnessSource *random)
+static size_t ldpc_block_length(const void *params)
 {
-    const LDPCParams *params =
-        (const LDPCParams *)params_ptr;
+    return ((const LDPCParams *)params)->n;
+}
 
-    if (params == NULL ||
-        random == NULL ||
-        random->rng == NULL)
+/*
+ * (P, G) <- LDPC[n, g, t, r] and z <- F_2^n: samples P, then the g columns of G
+ * as independent, uniform elements of ker P (sparse_matrix_sample_kernel). Fails
+ * for parameters that are not structurally valid.
+ */
+static ZBPRC_Keys *ldpc_keygen(const void *params_ptr, RandomnessSource *random)
+{
+    const LDPCParams *params = params_ptr;
+
+    if (params == NULL || random == NULL || random->rng == NULL ||
+        params->n == 0 || params->r == 0 || params->g == 0 ||
+        params->t == 0 || params->t > params->n || params->g + params->r > params->n)
         return NULL;
 
-    if (params->n == 0 ||
-        params->r == 0 ||
-        params->g == 0 ||
-        params->t > params->n ||
-        params->g > params->n)
-        return NULL;
-
-    ZBPRC_Keys *keys =
-        calloc(1, sizeof(ZBPRC_Keys));
+    ZBPRC_Keys *keys = calloc(1, sizeof(*keys));
 
     if (keys == NULL)
         return NULL;
 
-    keys->enc =
-        calloc(1, sizeof(ZBPRC_EncKey));
+    keys->enc = calloc(1, sizeof(*keys->enc));
+    keys->dec = calloc(1, sizeof(*keys->dec));
 
-    keys->dec =
-        calloc(1, sizeof(ZBPRC_DecKey));
-
-    if (keys->enc == NULL ||
-    keys->dec == NULL) {
-
-        ldpc_free_enc_key(params_ptr, keys->enc);
-        ldpc_free_dec_key(params_ptr, keys->dec);
+    if (keys->enc == NULL || keys->dec == NULL) {
+        free(keys->enc);
+        free(keys->dec);
         free(keys);
-
         return NULL;
     }
 
-    /*
-     * Sample P.
-     */
-    SparseP P =
-        sparse_p_alloc(params->r,
-                       params->n,
-                       params->t);
+    keys->dec->P = sparse_matrix_alloc(params->r, params->n, params->t);
+    sparse_matrix_sample(&keys->dec->P, random);
 
-    sample_sparse_p(random, &P);
+    keys->enc->G = sparse_matrix_sample_kernel(&keys->dec->P, params->g, random);
 
-    /* basis of ker P (Gaussian elimination by M4RI) */
-    KernelBasis K = sparse_p_kernel(&P);
+    keys->enc->z = bitvector_alloc(params->n);
+    random_bitvector(random, &keys->enc->z);
 
-    if (params->g > K.dimension) {
-        fprintf(stderr, "ZBPRC-LDPC: g=%zu exceeds dim ker(P)=%zu.\n",
-                params->g, K.dimension);
-
-        kernel_basis_free(&K);
-        sparse_p_free(&P);
-        ldpc_free_enc_key(params_ptr, keys->enc);
-        ldpc_free_dec_key(params_ptr, keys->dec);
-        free(keys);
-
-        return NULL;
-    }
-
-    /* g uniform elements of ker P as the columns of G */
-    PackedG G = kernel_random_span(&K, params->n, params->g, random);
-
-    kernel_basis_free(&K);
-
-    /*
-     * Sample z.
-     */
-    BitVector z =
-        bitvector_alloc(params->n);
-
-    random_bitvector(random, &z);
-
-    /*
-     * Both keys contain the same z.
-     */
-    keys->enc->G = G;
-    keys->enc->z =
-        bitvector_alloc(params->n);
-
-    memcpy(keys->enc->z.data,
-           z.data,
-           z.words * sizeof(uint64_t));
-
-    keys->dec->P = P;
-    keys->dec->z =
-        bitvector_alloc(params->n);
-
-    memcpy(keys->dec->z.data,
-           z.data,
-           z.words * sizeof(uint64_t));
-
-    bitvector_free(&z);
+    keys->dec->z = bitvector_alloc(params->n);
+    bitvector_add(&keys->dec->z, &keys->enc->z);
 
     return keys;
 }
 
-/*
- * Encodes the bit 1: c = G s + z + e with s uniform and e ~ Ber(n, eta); the result is packed LSB first.
- */
-uint8_t *
-ldpc_encode(const void *params_ptr,
-            const ZBPRC_EncKey *key,
-            RandomnessSource *random,
-            size_t *output_bits)
+uint8_t *ldpc_encode_secret(const LDPCParams *params,
+                            const ZBPRC_EncKey *enc_key,
+                            const BitVector *x,
+                            RandomnessSource *random,
+                            size_t *codeword_bits)
 {
-    const LDPCParams *params =
-        (const LDPCParams *)params_ptr;
+    BitVector c = bitvector_alloc(params->n);
+    BitVector e = bitvector_alloc(params->n);
 
-    if (params == NULL ||
-        key == NULL ||
-        random == NULL ||
-        output_bits == NULL)
+    column_matrix_mul_vector(&enc_key->G, x, &c);
+
+    random_bernoulli_vector(random, &e, params->eta);
+    bitvector_add(&c, &e);
+    bitvector_add(&c, &enc_key->z);
+
+    uint8_t *codeword = bitvector_to_bytes(&c);
+
+    if (codeword != NULL)
+        *codeword_bits = params->n;
+
+    bitvector_free(&e);
+    bitvector_free(&c);
+
+    return codeword;
+}
+
+int ldpc_syndrome_test(const SparseMatrix *P,
+                       const BitVector *z,
+                       const uint8_t *codeword,
+                       size_t codeword_bits)
+{
+    if (codeword == NULL || codeword_bits != P->cols)
+        return 0;
+
+    BitVector c = bitvector_alloc(P->cols);
+    BitVector syndrome = bitvector_alloc(P->rows);
+
+    bitvector_from_bytes(&c, codeword);
+    bitvector_add(&c, z);
+    sparse_matrix_mul_vector(P, &c, &syndrome);
+
+    const double rows = (double)P->rows;
+    const double threshold = (0.5 - pow(rows, -0.25)) * rows;
+    const int accepted = (double)bitvector_weight(&syndrome) < threshold;
+
+    bitvector_free(&syndrome);
+    bitvector_free(&c);
+
+    return accepted;
+}
+
+/* Encodes the bit 1: c = G s + z + e with s uniform in F_2^g. */
+static uint8_t *ldpc_encode(const void *params_ptr,
+                            const ZBPRC_EncKey *enc_key,
+                            RandomnessSource *random,
+                            size_t *codeword_bits)
+{
+    const LDPCParams *params = params_ptr;
+
+    if (params == NULL || enc_key == NULL || random == NULL || codeword_bits == NULL)
         return NULL;
 
-    /*
-     * s <- F_2^g
-     */
-    BitVector s =
-        bitvector_alloc(params->g);
+    BitVector s = bitvector_alloc(params->g);
 
     random_bitvector(random, &s);
 
-    /*
-     * e <- Ber(n, eta)
-     */
-    BitVector e =
-        bitvector_alloc(params->n);
-
-    random_bernoulli_vector(random,
-                            &e,
-                            params->eta);
-
-    /*
-     * Gs.
-     */
-    BitVector Gs =
-        bitvector_alloc(params->n);
-
-    packed_g_mul(&key->G,
-                 &s,
-                 &Gs);
-
-    /*
-     * c = Gs + z + e.
-     */
-    BitVector c =
-        bitvector_alloc(params->n);
-
-    for (size_t w = 0;
-         w < c.words;
-         ++w) {
-
-        c.data[w] =
-            Gs.data[w] ^
-            key->z.data[w] ^
-            e.data[w];
-    }
-
-    /*
-     * Convert to packed byte representation.
-     */
-    size_t bytes =
-        (params->n + 7) / 8;
-
-    uint8_t *result =
-        calloc(bytes, 1);
-
-    if (result == NULL) {
-
-        bitvector_free(&s);
-        bitvector_free(&e);
-        bitvector_free(&Gs);
-        bitvector_free(&c);
-
-        return NULL;
-    }
-
-    for (size_t i = 0;
-         i < params->n;
-         ++i) {
-
-        if (bit_get(&c, i)) {
-
-            result[i >> 3] |=
-                (uint8_t)(
-                    1u << (i & 7)
-                );
-        }
-    }
-
-    *output_bits = params->n;
+    uint8_t *codeword = ldpc_encode_secret(params, enc_key, &s, random, codeword_bits);
 
     bitvector_free(&s);
-    bitvector_free(&e);
-    bitvector_free(&Gs);
-    bitvector_free(&c);
 
-    return result;
+    return codeword;
 }
 
-
-/*
- * Accepts iff wgt(P (c + z)) < (1/2 - r^(-1/4)) r (see the comment at the top of the
- * file). Strings of a length other than n are rejected.
- */
-int
-ldpc_decode(const void *params_ptr,
-            const ZBPRC_DecKey *key,
-            const uint8_t *ciphertext,
-            size_t ciphertext_bits)
+/* Accepts iff wgt(P (c + z)) < (1/2 - r^(-1/4)) r; strings of a length other than n are rejected. */
+static int ldpc_decode(const void *params_ptr,
+                       const ZBPRC_DecKey *dec_key,
+                       const uint8_t *codeword,
+                       size_t codeword_bits)
 {
-    const LDPCParams *params =
-        (const LDPCParams *)params_ptr;
-
-    if (params == NULL ||
-        key == NULL ||
-        ciphertext == NULL)
+    if (params_ptr == NULL || dec_key == NULL)
         return 0;
 
-    /*
-     * size of ciphertext must have size n
-     */
-    if (ciphertext_bits != params->n)
-        return 0;
-
-
-    /*
-     * Convert byte representation to BitVector.
-     */
-    BitVector c =
-        bitvector_alloc(params->n);
-
-    for (size_t i = 0;
-         i < params->n;
-         ++i) {
-
-        if (ciphertext[i >> 3] &
-            (uint8_t)(
-                1u << (i & 7)
-            )) {
-
-            bit_set(&c, i, 1);
-        }
-    }
-
-    /*
-     * Pc.
-     */
-    BitVector Pc =
-        bitvector_alloc(params->r);
-
-    sparse_p_mul(&key->P,
-                 &c,
-                 &Pc);
-
-    /*
-     * Pz.
-     */
-    BitVector Pz =
-        bitvector_alloc(params->r);
-
-    sparse_p_mul(&key->P,
-                 &key->z,
-                 &Pz);
-
-    /*
-     * Pc + Pz.
-     */
-    for (size_t w = 0;
-         w < Pc.words;
-         ++w) {
-
-        Pc.data[w] ^=
-            Pz.data[w];
-    }
-
-    /*
-     * wt(Pc + Pz)
-     */
-    size_t weight =
-        bitvector_weight(&Pc);
-
-    /*
-     * Threshold:
-     *
-     *     (1/2 - r^(-1/4)) r
-     */
-    double threshold =
-        (0.5 -
-         pow((double)params->r,
-             -0.25))
-        * (double)params->r;
-
-    int result =
-        ((double)weight < threshold);
-
-    bitvector_free(&c);
-    bitvector_free(&Pc);
-    bitvector_free(&Pz);
-
-    return result;
+    return ldpc_syndrome_test(&dec_key->P, &dec_key->z, codeword, codeword_bits);
 }
 
-
-/*
- * The LDPC zero-bit PRC as a ZBPRC (the parameters must outlive it).
- */
-ZBPRC
-prc_ldpc(const LDPCParams *params)
+ZBPRC prc_ldpc(const LDPCParams *params)
 {
-    ZBPRC prc = {
+    return (ZBPRC){
         .params = params,
-
-        .blocksize = ldpc_blocksize,
-
-        .keygen =
-            ldpc_keygen,
-
-        .encode =
-            ldpc_encode,
-
-        .decode =
-            ldpc_decode,
-
-        .free_enc_key =
-            ldpc_free_enc_key,
-
-        .free_dec_key =
-            ldpc_free_dec_key
+        .block_length = ldpc_block_length,
+        .keygen = ldpc_keygen,
+        .encode = ldpc_encode,
+        .decode = ldpc_decode,
+        .free_enc_key = ldpc_free_enc_key,
+        .free_dec_key = ldpc_free_dec_key,
     };
-
-    return prc;
 }

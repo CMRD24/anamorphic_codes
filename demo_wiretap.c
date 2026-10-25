@@ -2,7 +2,7 @@
  * Wiretap code (OAEP4 as the IFE, Hamming(7,4) as ECC) with the
  * randomness-recovery anamorphic mode.
  *
- * The regular message is zero-padded to a multiple of K_bytes. The code is
+ * The regular message is zero-padded to a multiple of block_bytes. The code is
  * keyless; the anamorphic key is a 32 byte symmetric key.
  */
 #include <stdio.h>
@@ -16,46 +16,46 @@
 #include "wiretap/wiretap.h"
 
 static const DemoParamSpec specs[] = {
-    {"K_bytes", "32", "block size in bytes (even)"},
-    {"security_parameter", "128", "lambda in bits"},
-    {"ana_message_length", "16", "anamorphic message bytes (K_bytes - ana_message_length >= 16)"},
+    {"block_bytes", "32", "block size in bytes (even)"},
+    {"lambda", "128", "lambda in bits"},
+    {"amessage_bytes", "16", "anamorphic message bytes (block_bytes - amessage_bytes >= 16)"},
     {NULL, NULL, NULL}
 };
 
 typedef struct {
     ECC ecc;
-    wiretap_config_t cfg;
-    wiretap_ana_config_t acfg;
+    wiretap_config_t config;
+    wiretap_aconfig_t aconfig;
     int have_key;
     uint8_t key[DEMO_KEY_BYTES];
 } Wiretap;
 
 static void *wiretap_open(const DemoParams *params, const DemoKeys *keys)
 {
-    Wiretap *w = calloc(1, sizeof(*w));
+    Wiretap *wiretap = calloc(1, sizeof(*wiretap));
 
-    if (w == NULL)
+    if (wiretap == NULL)
         return NULL;
 
-    w->ecc = hamming74_ecc();
-    w->cfg = (wiretap_config_t){
-        .K_bytes = demo_param_size(params, "K_bytes"),
-        .security_parameter = demo_param_size(params, "security_parameter"),
-        .ecc = &w->ecc,
+    wiretap->ecc = hamming74_ecc();
+    wiretap->config = (wiretap_config_t){
+        .block_bytes = demo_param_size(params, "block_bytes"),
+        .lambda = demo_param_size(params, "lambda"),
+        .ecc = &wiretap->ecc,
     };
-    w->acfg.ana_message_length = demo_param_size(params, "ana_message_length");
+    wiretap->aconfig.amessage_bytes = demo_param_size(params, "amessage_bytes");
 
-    if (!wiretap_config_valid(&w->cfg)) {
-        fprintf(stderr, "invalid wiretap parameters (K_bytes must be positive and even)\n");
-    } else if (!wiretap_ana_config_valid(&w->cfg, &w->acfg)) {
-        fprintf(stderr, "invalid ana_message_length: need 0 < length <= K_bytes - 16\n");
+    if (!wiretap_config_valid(&wiretap->config)) {
+        fprintf(stderr, "invalid wiretap parameters (block_bytes must be positive and even)\n");
+    } else if (!wiretap_aconfig_valid(&wiretap->config, &wiretap->aconfig)) {
+        fprintf(stderr, "invalid amessage_bytes: need 0 < length <= block_bytes - 16\n");
     } else {
-        w->have_key = keys->have_anamorphic;
-        memcpy(w->key, keys->anamorphic, sizeof(w->key));
-        return w;
+        wiretap->have_key = keys->have_anamorphic;
+        memcpy(wiretap->key, keys->anamorphic, sizeof(wiretap->key));
+        return wiretap;
     }
 
-    free(w);
+    free(wiretap);
 
     return NULL;
 }
@@ -65,48 +65,52 @@ static void wiretap_close(void *handle)
     free(handle);
 }
 
-/* pads the message to a positive multiple of K_bytes */
-static uint8_t *padded_message(const Wiretap *w, const char *message, size_t *len)
+/* pads the message to a positive multiple of block_bytes */
+static uint8_t *padded_message(const Wiretap *wiretap, const char *message, size_t *padded_len)
 {
-    size_t n = message != NULL ? strlen(message) : 0;
-    uint8_t *buf;
+    const size_t block_bytes = wiretap->config.block_bytes;
+    const size_t text_len = message != NULL ? strlen(message) : 0;
+    const size_t blocks = text_len == 0 ? 1 : (text_len + block_bytes - 1) / block_bytes;
+    uint8_t *padded;
 
-    *len = n == 0 ? w->cfg.K_bytes : (n + w->cfg.K_bytes - 1) / w->cfg.K_bytes * w->cfg.K_bytes;
-    buf = calloc(*len, 1);
+    *padded_len = blocks * block_bytes;
+    padded = calloc(*padded_len, 1);
 
-    if (buf != NULL)
-        memcpy(buf, message != NULL ? message : "", n);
+    if (padded != NULL)
+        memcpy(padded, message != NULL ? message : "", text_len);
 
-    return buf;
+    return padded;
 }
 
-static int finish_encode(const Wiretap *w, const uint8_t *amessage_or_null, const char *message,
+static int finish_encode(const Wiretap *wiretap, const uint8_t *amessage, const char *message,
                          DemoCiphertext *out)
 {
-    size_t mlen, olen = 0, cap;
-    uint8_t *msg = padded_message(w, message, &mlen);
-    uint8_t *ct;
-    RandomnessSource rng = linux_randomness();
-    int rc = -1;
+    size_t message_len, codeword_len = 0, capacity;
+    uint8_t *message_buffer = padded_message(wiretap, message, &message_len);
+    uint8_t *codeword;
+    RandomnessSource random = linux_randomness();
+    int result = -1;
 
-    cap = wiretap_encoded_size(&w->cfg, mlen);
-    ct = msg != NULL && cap > 0 ? malloc(cap) : NULL;
+    capacity = wiretap_encoded_size(&wiretap->config, message_len);
+    codeword = message_buffer != NULL && capacity > 0 ? malloc(capacity) : NULL;
 
-    if (ct != NULL) {
-        rc = amessage_or_null == NULL
-            ? wiretap_encode(&w->cfg, &rng, msg, mlen, ct, cap, &olen)
-            : wiretap_aencode(&w->cfg, &w->acfg, w->key, msg, mlen, amessage_or_null, ct, cap, &olen);
+    if (codeword != NULL) {
+        result = amessage == NULL
+            ? wiretap_encode(&wiretap->config, &random, message_buffer, message_len, codeword,
+                             capacity, &codeword_len)
+            : wiretap_aencode(&wiretap->config, &wiretap->aconfig, wiretap->key, message_buffer,
+                              message_len, amessage, codeword, capacity, &codeword_len);
     }
 
-    if (rc == 0 && demo_ct_alloc(out, 1, 8 * olen) == 0)
-        memcpy(out->data[0], ct, olen);
+    if (result == 0 && demo_ct_alloc(out, 1, 8 * codeword_len) == 0)
+        memcpy(out->data[0], codeword, codeword_len);
     else
-        rc = -1;
+        result = -1;
 
-    free(ct);
-    free(msg);
+    free(codeword);
+    free(message_buffer);
 
-    return rc;
+    return result;
 }
 
 static int wiretap_encode_op(void *handle, const char *message, DemoCiphertext *out)
@@ -119,62 +123,66 @@ static int wiretap_encode_op(void *handle, const char *message, DemoCiphertext *
     return 0;
 }
 
-static int wiretap_aencode_op(void *handle, const char *message, const char *amessage,
+static int wiretap_aencode_op(void *handle, const char *message, const char *amessage_text,
                               DemoCiphertext *out)
 {
-    Wiretap *w = handle;
-    uint8_t *amsg = calloc(w->acfg.ana_message_length, 1);
-    int rc = -1;
+    Wiretap *wiretap = handle;
+    uint8_t *amessage = calloc(wiretap->aconfig.amessage_bytes, 1);
+    int result = -1;
 
-    if (amsg != NULL && demo_pad_message(amessage, amsg, w->acfg.ana_message_length) == 0)
-        rc = finish_encode(w, amsg, message, out);
+    if (amessage != NULL &&
+        demo_pad_message(amessage_text, amessage, wiretap->aconfig.amessage_bytes) == 0)
+        result = finish_encode(wiretap, amessage, message, out);
 
-    free(amsg);
+    free(amessage);
 
-    if (rc != 0)
+    if (result != 0)
         fprintf(stderr, "anamorphic encoding failed\n");
 
-    return rc;
+    return result;
 }
 
 static int wiretap_decode_op(void *handle, const DemoCiphertext *in)
 {
-    Wiretap *w = handle;
-    size_t cap = wiretap_decoded_size(&w->cfg, in->bits / 8), olen = 0;
-    uint8_t *out = cap > 0 ? malloc(cap) : NULL;
-    int rc = -1;
+    Wiretap *wiretap = handle;
+    const size_t capacity = wiretap_decoded_size(&wiretap->config, in->bits / 8);
+    uint8_t *message = capacity > 0 ? malloc(capacity) : NULL;
+    size_t message_len = 0;
+    int result = -1;
 
-    if (in->count == 1 && out != NULL &&
-        wiretap_decode(&w->cfg, in->data[0], in->bits / 8, out, cap, &olen) == 0) {
-        demo_print_bytes("message", out, olen);
-        rc = 0;
+    if (in->count == 1 && message != NULL &&
+        wiretap_decode(&wiretap->config, in->data[0], in->bits / 8, message, capacity,
+                       &message_len) == 0) {
+        demo_print_bytes("message", message, message_len);
+        result = 0;
     } else {
         printf("decoding failed\n");
     }
 
-    free(out);
+    free(message);
 
-    return rc;
+    return result;
 }
 
 static int wiretap_adecode_op(void *handle, const DemoCiphertext *in)
 {
-    Wiretap *w = handle;
-    uint8_t *amsg = calloc(w->acfg.ana_message_length, 1);
-    int rc = -1;
+    Wiretap *wiretap = handle;
+    uint8_t *amessage = calloc(wiretap->aconfig.amessage_bytes, 1);
+    int result = -1;
 
     /* the encryption of the seed is not authenticated: any ciphertext decodes */
-    if (in->count == 1 && amsg != NULL &&
-        wiretap_adecode(&w->cfg, &w->acfg, w->key, in->data[0], in->bits / 8, amsg) == 0) {
-        demo_print_bytes("anamorphic message", amsg, w->acfg.ana_message_length);
-        rc = 0;
+    if (in->count == 1 && amessage != NULL &&
+        wiretap_adecode(&wiretap->config, &wiretap->aconfig, wiretap->key, in->data[0],
+                        in->bits / 8, amessage) == 0) {
+        demo_print_bytes("anamorphic message", amessage, wiretap->aconfig.amessage_bytes);
+        result = 0;
     } else {
         printf("no anamorphic message\n");
     }
 
-    free(amsg);
+    free(amessage);
 
-    return rc;
+    return result;
 }
 
 /* exported so that the benchmark can use the code without its main */

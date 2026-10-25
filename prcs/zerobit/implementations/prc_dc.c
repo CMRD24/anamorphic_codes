@@ -1,8 +1,9 @@
 /*
  * Zero-bit PRC for channels with deletions and insertions (substitutions), built
- * on any zero-bit PRC with k-bit codewords: each codeword bit is expanded into a
- * slice with the same majority, in the spirit of the constructions for indel
- * channels in Christ and Gunn, "Pseudorandom Error-Correcting Codes", CRYPTO 2024.
+ * on any zero-bit PRC with codewords of k bits: each codeword bit is expanded into
+ * a slice of T bits with the same majority, in the spirit of the constructions for
+ * indel channels in Christ and Gunn, "Pseudorandom Error-Correcting Codes",
+ * CRYPTO 2024.
  *
  * Encode: every bit b_i of a codeword of the underlying PRC is replaced by a
  * uniform T-bit string z_i whose majority is b_i; the output is z_1 || ... || z_k
@@ -14,693 +15,180 @@
  * majority of every slice and decode the resulting k bits with the underlying
  * PRC. Isolated deletions and insertions only move slice boundaries slightly, so
  * the majorities mostly stay correct.
+ *
+ * The keys are those of the underlying PRC.
  */
 
 #include "prc_dc.h"
 
 #include <stdint.h>
 #include <stdlib.h>
-#include <limits.h>
 
-#include <stdio.h>
-
-#include "../../../utils/random_utils.h"
 #include "../../../utils/helpers.h"
+#include "../../../utils/random_utils.h"
 
 
-/*
- * ================================================================
- * Concrete opaque key types
- * ================================================================
- *
- * The DC-PRC only wraps the corresponding key of the underlying
- * PRC. The underlying PRC itself is stored in PRCDC_Params.
- */
-
-struct ZBPRC_EncKey {
-    ZBPRC_EncKey *inner;
-};
-
-struct ZBPRC_DecKey {
-    ZBPRC_DecKey *inner;
-};
-
-
-/*
- * ================================================================
- * Bit utilities
- * ================================================================
- */
-
-size_t
-prc_dc_bytes_for_bits(size_t n)
-{
-    return (n + 7u) / 8u;
-}
-
-
-static inline void
-set_bit_1(
-    uint8_t *data,
-    size_t index)
-{
-    data[index >> 3u] |=
-        (uint8_t)(1u << (index & 7u));
-}
-
-
-/*
- * ================================================================
- * Majority
- * ================================================================
- *
- * Majority(z) =
- *
- *     1 if wt(z) > |z| / 2
- *     0 otherwise
- *
- * Thus, for even |z|, exactly half ones gives 0.
- */
-
-uint8_t
-prc_dc_majority(
-    const uint8_t *bits,
-    size_t bit_offset,
-    size_t length)
+/* 1 if more than half of the bits [offset, offset + length) are 1 (a tie gives 0) */
+static uint8_t majority(const uint8_t *bits, size_t offset, size_t length)
 {
     size_t weight = 0;
 
-    for (size_t i = 0;
-         i < length;
-         ++i) {
+    for (size_t i = 0; i < length; ++i)
+        weight += get_bit(bits, offset + i);
 
-        weight +=
-            get_bit(
-                bits,
-                bit_offset + i
-            );
-    }
-
-    return (uint8_t)(
-        weight > length / 2u
-    );
+    return (uint8_t)(weight > length / 2);
 }
 
-
 /*
- * ================================================================
- * Majority-slice sampling
- * ================================================================
- *
- * Samples uniformly from
- *
- *     { z in {0,1}^T :
- *       Majority(z) = majority }.
- *
- * Rejection sampling gives the exact uniform distribution over
- * this set.
+ * Writes a uniform element of { z in {0,1}^slice_bits : majority(z) = bit } to
+ * the (zeroed) bits [offset, offset + slice_bits) of output, by rejection
+ * sampling of uniform strings (exactly uniform on that set). Returns 0 on
+ * allocation failure.
  */
-
-static int
-sample_majority_slice(
-    uint8_t *output,
-    size_t output_bit_offset,
-    size_t T,
-    uint8_t majority,
-    RandomnessSource *random)
+static int sample_majority_slice(uint8_t *output, size_t offset, size_t slice_bits,
+                                 uint8_t bit, RandomnessSource *random)
 {
-    if (output == NULL ||
-        T == 0 ||
-        majority > 1u) {
-
-        return 0;
-    }
-
-    const size_t bytes =
-        prc_dc_bytes_for_bits(T);
-
-    uint8_t *candidate =
-        malloc(bytes);
+    const size_t slice_bytes = bits_to_bytes(slice_bits);
+    uint8_t *candidate = malloc(slice_bytes);
 
     if (candidate == NULL)
         return 0;
 
-    for (;;) {
+    do {
+        random_bytes(random, candidate, slice_bytes);
+    } while (majority(candidate, 0, slice_bits) != bit);
 
-        /*
-         * Sample a uniformly random T-bit string.
-         */
-        random_bytes(
-                random,
-                candidate,
-                bytes);
-
-        /*
-         * Clear unused padding bits.
-         */
-        if ((T & 7u) != 0u) {
-
-            const uint8_t mask =
-                (uint8_t)(
-                    (1u << (T & 7u)) - 1u
-                );
-
-            candidate[bytes - 1u] &= mask;
-        }
-
-        /*
-         * Reject if the majority is wrong.
-         */
-        if (prc_dc_majority(
-                candidate,
-                0,
-                T) != majority) {
-
-            continue;
-        }
-
-        /*
-         * Copy the accepted T-bit slice.
-         *
-         * output is zero-initialized by the caller, so only
-         * one-bits have to be written.
-         */
-        for (size_t i = 0;
-             i < T;
-             ++i) {
-
-            if (get_bit(candidate, i)) {
-
-                set_bit_1(
-                    output,
-                    output_bit_offset + i
-                );
-            }
-        }
-
-        free(candidate);
-        return 1;
-    }
-}
-
-
-/*
- * ================================================================
- * Parameter validation
- * ================================================================
- */
-
-static int
-prc_dc_valid_params(
-    const PRCDC_Params *params)
-{
-    if (params == NULL)
-        return 0;
-
-    if (params->k == 0 ||
-        params->T == 0) {
-
-        return 0;
-    }
-
-    if (params->underlying == NULL)
-        return 0;
-
-    if (params->underlying->keygen == NULL ||
-        params->underlying->encode == NULL ||
-        params->underlying->decode == NULL ||
-        params->underlying->free_enc_key == NULL ||
-        params->underlying->free_dec_key == NULL) {
-
-        return 0;
-    }
-
-    /*
-     * The DC-PRC output contains k*T bits.
-     */
-    if (params->k >
-        SIZE_MAX / params->T) {
-
-        return 0;
-    }
+    copy_bits(output, offset, candidate, 0, slice_bits);
+    free(candidate);
 
     return 1;
 }
 
-
-/*
- * ================================================================
- * Key generation
- * ================================================================
- */
-
-static ZBPRC_Keys *
-prc_dc_keygen(
-    const void *params_ptr,
-    RandomnessSource *random)
+static int valid_params(const PRCDC_Params *params)
 {
-    const PRCDC_Params *params =
-        (const PRCDC_Params *)params_ptr;
-
-    if (!prc_dc_valid_params(params) ||
-        random == NULL) {
-
-        return NULL;
-    }
-
-    /*
-     * Delegate key generation completely to the underlying PRC.
-     */
-    ZBPRC_Keys *inner =
-        params->underlying->keygen(
-            params->underlying->params,
-            random
-        );
-
-    if (inner == NULL)
-        return NULL;
-
-    /*
-     * Wrap the underlying encoding key.
-     */
-    ZBPRC_EncKey *enc =
-        malloc(sizeof(*enc));
-
-    if (enc == NULL) {
-
-        if (inner->enc != NULL) {
-
-            params->underlying->free_enc_key(
-                params->underlying->params,
-                inner->enc
-            );
-        }
-
-        if (inner->dec != NULL) {
-
-            params->underlying->free_dec_key(
-                params->underlying->params,
-                inner->dec
-            );
-        }
-
-        free(inner);
-        return NULL;
-    }
-
-    enc->inner = inner->enc;
-
-    /*
-     * Wrap the underlying decoding key.
-     */
-    ZBPRC_DecKey *dec =
-        malloc(sizeof(*dec));
-
-    if (dec == NULL) {
-
-        if (enc->inner != NULL) {
-
-            params->underlying->free_enc_key(
-                params->underlying->params,
-                enc->inner
-            );
-        }
-
-        if (inner->dec != NULL) {
-
-            params->underlying->free_dec_key(
-                params->underlying->params,
-                inner->dec
-            );
-        }
-
-        free(enc);
-        free(inner);
-
-        return NULL;
-    }
-
-    dec->inner = inner->dec;
-
-    /*
-     * Ownership of inner->enc and inner->dec has been
-     * transferred to the wrapper keys.
-     */
-    free(inner);
-
-    /*
-     * Return the generic key pair.
-     */
-    ZBPRC_Keys *keys =
-        malloc(sizeof(*keys));
-
-    if (keys == NULL) {
-
-        params->underlying->free_enc_key(
-            params->underlying->params,
-            enc->inner
-        );
-
-        params->underlying->free_dec_key(
-            params->underlying->params,
-            dec->inner
-        );
-
-        free(enc);
-        free(dec);
-
-        return NULL;
-    }
-
-    keys->enc = enc;
-    keys->dec = dec;
-
-    return keys;
+    return params != NULL && params->slice_bits > 0 && params->underlying != NULL &&
+           params->underlying->block_length != NULL &&
+           zbprc_block_length(params->underlying) <= SIZE_MAX / params->slice_bits;
 }
 
-
-/*
- * ================================================================
- * Encoding
- * ================================================================
- */
-
-static uint8_t *
-prc_dc_encode(
-    const void *params_ptr,
-    const ZBPRC_EncKey *base_key,
-    RandomnessSource *random,
-    size_t *output_bits)
+static size_t dc_block_length(const void *params_ptr)
 {
-    const PRCDC_Params *params =
-        (const PRCDC_Params *)params_ptr;
+    const PRCDC_Params *params = params_ptr;
 
-    const ZBPRC_EncKey *key =
-        base_key;
-
-
-    if (!prc_dc_valid_params(params) ||
-        key == NULL ||
-        random == NULL ||
-        output_bits == NULL) {
-
-
-        return NULL;
-    }
-
-    /*
-     * First encode the distinguished bit 1 with the underlying
-     * zero-bit PRC.
-     *
-     * The result must contain exactly k bits.
-     */
-    size_t inner_bits = 0;
-
-    uint8_t *inner =
-        params->underlying->encode(
-            params->underlying->params,
-            key->inner,
-            random,
-            &inner_bits
-        );
-
-
-    if (inner == NULL)
-        return NULL;
-
-    if (inner_bits != params->k) {
-
-        printf("misconfigured number of bits\n");
-        free(inner);
-        return NULL;
-    }
-
-    /*
-     * The DC-PRC output consists of k slices of T bits:
-     *
-     *     z_1 || z_2 || ... || z_k
-     *
-     * where
-     *
-     *     Majority(z_i) = inner_i.
-     */
-    const size_t encoded_bits =
-        params->k * params->T;
-
-    const size_t encoded_bytes =
-        prc_dc_bytes_for_bits(
-            encoded_bits
-        );
-
-    uint8_t *output =
-        calloc(encoded_bytes, 1);
-
-    if (output == NULL) {
-
-        free(inner);
-        return NULL;
-    }
-
-    for (size_t i = 0;
-         i < params->k;
-         ++i) {
-
-        const uint8_t majority =
-            get_bit(inner, i);
-
-        if (!sample_majority_slice(
-                output,
-                i * params->T,
-                params->T,
-                majority,
-                random)) {
-
-            free(output);
-            free(inner);
-
-            return NULL;
-        }
-    }
-
-    free(inner);
-
-    *output_bits =
-        encoded_bits;
-
-    return output;
+    return zbprc_block_length(params->underlying) * params->slice_bits;
 }
 
-
-/*
- * ================================================================
- * Decoding
- * ================================================================
- */
-
-static int
-prc_dc_decode(
-    const void *params_ptr,
-    const ZBPRC_DecKey *base_key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits)
+static ZBPRC_Keys *dc_keygen(const void *params_ptr, RandomnessSource *random)
 {
-    const PRCDC_Params *params =
-        (const PRCDC_Params *)params_ptr;
+    const PRCDC_Params *params = params_ptr;
 
-    const ZBPRC_DecKey *key =
-        base_key;
+    if (!valid_params(params) || random == NULL)
+        return NULL;
 
-    if (!prc_dc_valid_params(params) ||
-        key == NULL ||
-        ciphertext == NULL) {
+    return zbprc_keygen(params->underlying, random);
+}
 
-        printf("invalid params. Decoding to 0\n");
+static uint8_t *dc_encode(const void *params_ptr,
+                          const ZBPRC_EncKey *enc_key,
+                          RandomnessSource *random,
+                          size_t *codeword_bits)
+{
+    const PRCDC_Params *params = params_ptr;
 
-        return 0;
+    if (!valid_params(params) || enc_key == NULL || random == NULL || codeword_bits == NULL)
+        return NULL;
+
+    size_t underlying_bits = 0;
+    uint8_t *underlying_codeword = zbprc_encode(params->underlying, enc_key, random,
+                                                &underlying_bits);
+
+    if (underlying_codeword == NULL)
+        return NULL;
+
+    uint8_t *codeword = calloc(bits_to_bytes(underlying_bits * params->slice_bits) + 1, 1);
+    int ok = codeword != NULL;
+
+    for (size_t i = 0; ok && i < underlying_bits; ++i)
+        ok = sample_majority_slice(codeword, i * params->slice_bits, params->slice_bits,
+                                   get_bit(underlying_codeword, i), random);
+
+    free(underlying_codeword);
+
+    if (!ok) {
+        free(codeword);
+        return NULL;
     }
 
-    const size_t k =
-        params->k;
+    *codeword_bits = underlying_bits * params->slice_bits;
 
-    /*
-     * Every one of the k slices must contain at least one bit.
-     */
-    if (ciphertext_bits < k)
+    return codeword;
+}
+
+static int dc_decode(const void *params_ptr,
+                     const ZBPRC_DecKey *dec_key,
+                     const uint8_t *codeword,
+                     size_t codeword_bits)
+{
+    const PRCDC_Params *params = params_ptr;
+
+    if (!valid_params(params) || dec_key == NULL || codeword == NULL)
         return 0;
 
-    /*
-     * Partition the received ciphertext into k balanced slices.
-     *
-     * Let
-     *
-     *     q = floor(L / k)
-     *     r = L mod k.
-     *
-     * The first r slices have q+1 bits and the remaining
-     * k-r slices have q bits.
-     */
-    const size_t q =
-        ciphertext_bits / k;
+    const size_t underlying_bits = zbprc_block_length(params->underlying);
 
-    const size_t r =
-        ciphertext_bits % k;
-
-    /*
-     * Reconstruct the k-bit codeword of the underlying PRC.
-     */
-    const size_t inner_bytes =
-        prc_dc_bytes_for_bits(k);
-
-    uint8_t *inner =
-        calloc(inner_bytes, 1);
-
-    if (inner == NULL)
+    /* every slice must contain at least one bit */
+    if (codeword_bits < underlying_bits)
         return 0;
 
+    /* L = short_length k + remainder: the first `remainder` slices have one bit more */
+    const size_t short_length = codeword_bits / underlying_bits;
+    const size_t remainder = codeword_bits % underlying_bits;
+    uint8_t *underlying_codeword = calloc(bits_to_bytes(underlying_bits), 1);
     size_t offset = 0;
 
-    for (size_t i = 0;
-         i < k;
-         ++i) {
+    if (underlying_codeword == NULL)
+        return 0;
 
-        const size_t slice_length =
-            q + (i < r ? 1u : 0u);
+    for (size_t i = 0; i < underlying_bits; ++i) {
+        const size_t slice_length = short_length + (i < remainder ? 1 : 0);
 
-        const uint8_t majority =
-            prc_dc_majority(
-                ciphertext,
-                offset,
-                slice_length
-            );
-
-        if (majority)
-            set_bit_1(inner, i);
-
+        set_bit(underlying_codeword, i, majority(codeword, offset, slice_length));
         offset += slice_length;
     }
 
-    /*
-     * Defensive sanity check.
-     */
-    if (offset != ciphertext_bits) {
+    const int accepted = zbprc_decode(params->underlying, dec_key, underlying_codeword,
+                                      underlying_bits);
 
-        printf("insane!\n");
+    free(underlying_codeword);
 
-        free(inner);
-        return 0;
-    }
-
-    /*
-     * Delegate decoding to the underlying PRC.
-     */
-    const int result =
-        params->underlying->decode(
-            params->underlying->params,
-            key->inner,
-            inner,
-            k
-        );
-
-    free(inner);
-
-    return result;
+    return accepted;
 }
 
-
-/*
- * ================================================================
- * Encoding-key destruction
- * ================================================================
- */
-
-static void
-prc_dc_free_enc_key(
-    const void *params_ptr,
-    ZBPRC_EncKey *base_key)
+static void dc_free_enc_key(const void *params_ptr, ZBPRC_EncKey *enc_key)
 {
-    const PRCDC_Params *params =
-        (const PRCDC_Params *)params_ptr;
+    const PRCDC_Params *params = params_ptr;
 
-    if (base_key == NULL)
-        return;
-
-    if (params != NULL &&
-        params->underlying != NULL) {
-
-        if (base_key->inner != NULL) {
-
-            params->underlying->free_enc_key(
-                params->underlying->params,
-                base_key->inner
-            );
-        }
-    }
-
-    free(base_key);
+    if (enc_key != NULL)
+        zbprc_free_enc_key(params->underlying, enc_key);
 }
 
-
-/*
- * ================================================================
- * Decoding-key destruction
- * ================================================================
- */
-
-static void
-prc_dc_free_dec_key(
-    const void *params_ptr,
-    ZBPRC_DecKey *base_key)
+static void dc_free_dec_key(const void *params_ptr, ZBPRC_DecKey *dec_key)
 {
-    const PRCDC_Params *params =
-        (const PRCDC_Params *)params_ptr;
+    const PRCDC_Params *params = params_ptr;
 
-    if (base_key == NULL)
-        return;
-
-    if (params != NULL &&
-        params->underlying != NULL) {
-
-        if (base_key->inner != NULL) {
-
-            params->underlying->free_dec_key(
-                params->underlying->params,
-                base_key->inner
-            );
-        }
-    }
-
-    free(base_key);
+    if (dec_key != NULL)
+        zbprc_free_dec_key(params->underlying, dec_key);
 }
 
-
-/*
- * ================================================================
- * DC-PRC construction
- * ================================================================
- */
-
-ZBPRC
-prc_dc(
-    const PRCDC_Params *params)
+ZBPRC prc_dc(const PRCDC_Params *params)
 {
-    ZBPRC prc = {
+    return (ZBPRC){
         .params = params,
-
-        .keygen =
-            prc_dc_keygen,
-
-        .encode =
-            prc_dc_encode,
-
-        .decode =
-            prc_dc_decode,
-
-        .free_enc_key =
-            prc_dc_free_enc_key,
-
-        .free_dec_key =
-            prc_dc_free_dec_key
+        .block_length = dc_block_length,
+        .keygen = dc_keygen,
+        .encode = dc_encode,
+        .decode = dc_decode,
+        .free_enc_key = dc_free_enc_key,
+        .free_dec_key = dc_free_dec_key,
     };
-
-    return prc;
 }

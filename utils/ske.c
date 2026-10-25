@@ -60,7 +60,7 @@ static int xor_prf_pad(
     return 0;
 }
 
-int encrypt(
+int ske_encrypt(
     const uint8_t *key,
     size_t nonce_len,
     const uint8_t *message,
@@ -76,7 +76,7 @@ int encrypt(
                        message, ciphertext + nonce_len, message_len);
 }
 
-int decrypt(
+int ske_decrypt(
     const uint8_t *key,
     size_t nonce_len,
     const uint8_t *ciphertext,

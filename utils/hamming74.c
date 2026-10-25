@@ -151,7 +151,7 @@ static uint8_t hamming_decode_codeword(uint8_t codeword)
  * Encoded size
  * ------------------------------------------------------------
  */
-size_t hamming_encoded_size(size_t input_len)
+static size_t hamming_encoded_size(size_t input_len)
 {
     /*
      * Every input byte becomes two Hamming(7,4) codewords,
@@ -165,7 +165,7 @@ size_t hamming_encoded_size(size_t input_len)
  * Decoded size
  * ------------------------------------------------------------
  */
-size_t hamming_decoded_size(size_t encoded_len)
+static size_t hamming_decoded_size(size_t encoded_len)
 {
     /*
      * Two codewords are required for every decoded byte.
@@ -183,7 +183,7 @@ size_t hamming_decoded_size(size_t encoded_len)
  * Encode
  * ------------------------------------------------------------
  */
-int hamming_encode(
+static int hamming_encode(
     const uint8_t *input,
     size_t input_len,
     uint8_t *output,
@@ -239,7 +239,7 @@ int hamming_encode(
  * Decode
  * ------------------------------------------------------------
  */
-int hamming_decode(
+static int hamming_decode(
     const uint8_t *input,
     size_t input_len,
     uint8_t *output,

@@ -1,213 +1,110 @@
 #ifndef ZERO_BIT_PRC_H
 #define ZERO_BIT_PRC_H
 
+/*
+ * Zero-bit PRC: the message space is {1}, i.e. a codeword only tells the decoder
+ * that it is not random.
+ *
+ *     KeyGen() -> (enc_key, dec_key)
+ *     Encode(enc_key) -> c
+ *     Decode(dec_key, c) -> 1 (accept) or 0 (reject)
+ *
+ * Every implementation defines its own struct ZBPRC_EncKey / ZBPRC_DecKey.
+ */
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 #include "../../utils/random.h"
 
-
-/*
- * ================================================================
- * Opaque key types
- * ================================================================
- */
-
 typedef struct ZBPRC_EncKey ZBPRC_EncKey;
 typedef struct ZBPRC_DecKey ZBPRC_DecKey;
-
-
-/*
- * ================================================================
- * Key pair
- * ================================================================
- */
 
 typedef struct {
     ZBPRC_EncKey *enc;
     ZBPRC_DecKey *dec;
 } ZBPRC_Keys;
 
-
-/*
- * ================================================================
- * Zero-bit PRC interface
- * ================================================================
- */
-
 typedef struct {
-
-    /*
-     * Implementation-specific parameters.
-     */
+    /* implementation-specific parameters */
     const void *params;
 
+    /* number of bits of a codeword */
+    size_t (*block_length)(const void *params);
 
-    size_t (*blocksize)(
-        const void *params
-    );
-
-
-    /*
-     * ------------------------------------------------------------
-     * Key generation
-     * ------------------------------------------------------------
-     *
-     * Generates both the encoding and decoding keys.
-     */
-    ZBPRC_Keys *(*keygen)(
-        const void *params,
-        RandomnessSource *random
-    );
-
+    /* generates the encoding and the decoding key, NULL on error */
+    ZBPRC_Keys *(*keygen)(const void *params, RandomnessSource *random);
 
     /*
-     * ------------------------------------------------------------
-     * Encoding
-     * ------------------------------------------------------------
-     *
-     * Encodes the distinguished bit 1.
-     *
-     * Returns a newly allocated packed bit string.
-     * The caller owns the returned buffer.
+     * Encodes the bit 1. Returns a newly allocated packed bit string (LSB first)
+     * of *codeword_bits bits, NULL on error.
      */
-    uint8_t *(*encode)(
-        const void *params,
-        const ZBPRC_EncKey *key,
-        RandomnessSource *random,
-        size_t *output_bits
-    );
+    uint8_t *(*encode)(const void *params,
+                       const ZBPRC_EncKey *enc_key,
+                       RandomnessSource *random,
+                       size_t *codeword_bits);
 
+    /* 1 = accept, 0 = reject */
+    int (*decode)(const void *params,
+                  const ZBPRC_DecKey *dec_key,
+                  const uint8_t *codeword,
+                  size_t codeword_bits);
 
-    /*
-     * ------------------------------------------------------------
-     * Decoding
-     * ------------------------------------------------------------
-     *
-     * Returns:
-     *
-     *     1 = accept
-     *     0 = reject
-     */
-    int (*decode)(
-        const void *params,
-        const ZBPRC_DecKey *key,
-        const uint8_t *ciphertext,
-        size_t ciphertext_bits
-    );
-
-
-    /*
-     * ------------------------------------------------------------
-     * Key destruction
-     * ------------------------------------------------------------
-     */
-
-    void (*free_enc_key)(
-        const void *params,
-        ZBPRC_EncKey *key
-    );
-
-    void (*free_dec_key)(
-        const void *params,
-        ZBPRC_DecKey *key
-    );
-
-
+    void (*free_enc_key)(const void *params, ZBPRC_EncKey *enc_key);
+    void (*free_dec_key)(const void *params, ZBPRC_DecKey *dec_key);
 } ZBPRC;
 
 
-/*
- * ================================================================
- * Convenience functions
- * ================================================================
- */
-
 static inline size_t
-zbprc_blocksize(
-    const ZBPRC *prc)
+zbprc_block_length(const ZBPRC *prc)
 {
-    return prc->blocksize(
-        prc->params
-    );
+    return prc->block_length(prc->params);
 }
 
-
 static inline ZBPRC_Keys *
-zbprc_keygen(
-    const ZBPRC *prc,
-    RandomnessSource *random)
+zbprc_keygen(const ZBPRC *prc, RandomnessSource *random)
 {
-    return prc->keygen(
-        prc->params,
-        random
-    );
+    return prc->keygen(prc->params, random);
 }
 
 static inline uint8_t *
-zbprc_encode(
-    const ZBPRC *prc,
-    const ZBPRC_EncKey *key,
-    RandomnessSource *random,
-    size_t *output_bits)
+zbprc_encode(const ZBPRC *prc, const ZBPRC_EncKey *enc_key,
+             RandomnessSource *random, size_t *codeword_bits)
 {
-    return prc->encode(
-        prc->params,
-        key,
-        random,
-        output_bits
-    );
+    return prc->encode(prc->params, enc_key, random, codeword_bits);
 }
-
 
 static inline int
-zbprc_decode(
-    const ZBPRC *prc,
-    const ZBPRC_DecKey *key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits)
+zbprc_decode(const ZBPRC *prc, const ZBPRC_DecKey *dec_key,
+             const uint8_t *codeword, size_t codeword_bits)
 {
-    return prc->decode(
-        prc->params,
-        key,
-        ciphertext,
-        ciphertext_bits
-    );
+    return prc->decode(prc->params, dec_key, codeword, codeword_bits);
 }
 
-
 static inline void
-zbprc_free_enc_key(
-    const ZBPRC *prc,
-    ZBPRC_EncKey *key)
+zbprc_free_enc_key(const ZBPRC *prc, ZBPRC_EncKey *enc_key)
 {
-    prc->free_enc_key(prc->params,key);
+    prc->free_enc_key(prc->params, enc_key);
 }
 
-
 static inline void
-zbprc_free_dec_key(
-    const ZBPRC *prc,
-    ZBPRC_DecKey *key)
+zbprc_free_dec_key(const ZBPRC *prc, ZBPRC_DecKey *dec_key)
 {
-    prc->free_dec_key(prc->params,key);
+    prc->free_dec_key(prc->params, dec_key);
 }
 
-
 static inline void
-zbprc_free_keys(
-    const ZBPRC *prc,
-    ZBPRC_Keys *keys)
+zbprc_free_keys(const ZBPRC *prc, ZBPRC_Keys *keys)
 {
-    if (!keys)
+    if (keys == NULL)
         return;
 
-    if (keys->enc)
-        prc->free_enc_key(prc->params,keys->enc);
+    if (keys->enc != NULL)
+        prc->free_enc_key(prc->params, keys->enc);
 
-    if (keys->dec)
-        prc->free_dec_key(prc->params,keys->dec);
+    if (keys->dec != NULL)
+        prc->free_dec_key(prc->params, keys->dec);
 
     free(keys);
 }

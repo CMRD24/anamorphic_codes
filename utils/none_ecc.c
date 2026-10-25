@@ -1,3 +1,6 @@
+//used as stub
+
+
 #include "none_ecc.h"
 
 #include <stddef.h>
@@ -8,9 +11,9 @@
  * Encoded size = input size.
  */
 static size_t
-none_ecc_encoded_size(size_t input_length)
+none_ecc_encoded_size(size_t input_len)
 {
-    return input_length;
+    return input_len;
 }
 
 /*

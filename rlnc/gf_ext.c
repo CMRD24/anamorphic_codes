@@ -36,10 +36,10 @@ static void bit_clear(gf_elem_t *a, unsigned i)
     a->w[i / 64] &= ~((uint64_t)1 << (i % 64));
 }
 
-/* a *= x (shift of the bit vector by one position) on the lowest nw words */
-static void poly_shl1(gf_elem_t *a, unsigned nw)
+/* a *= x (shift of the bit vector by one position) on the lowest `words` words */
+static void poly_shl1(gf_elem_t *a, unsigned words)
 {
-    for (unsigned i = nw - 1; i > 0; --i)
+    for (unsigned i = words - 1; i > 0; --i)
         a->w[i] = (a->w[i] << 1) | (a->w[i - 1] >> 63);
     a->w[0] <<= 1;
 }
@@ -67,18 +67,18 @@ int gf_is_zero(const gf_elem_t *a)
     return 1;
 }
 
-/* a += b over GF(2) (XOR) on the lowest nw words */
-static void xor_into(gf_elem_t *a, const gf_elem_t *b, unsigned nw)
+/* a += b over GF(2) (XOR) on the lowest `words` words */
+static void xor_into(gf_elem_t *a, const gf_elem_t *b, unsigned words)
 {
-    for (unsigned i = 0; i < nw; ++i)
+    for (unsigned i = 0; i < words; ++i)
         a->w[i] ^= b->w[i];
 }
 
-void gf_add(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
+void gf_add(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
 {
     unsigned i;
 
-    for (i = 0; i < F->nw; ++i)
+    for (i = 0; i < field->words; ++i)
         r->w[i] = a->w[i] ^ b->w[i];
 
     /* keep the invariant that the words above the field are zero */
@@ -89,9 +89,9 @@ void gf_add(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem
 /*
  * a == b. A bytewise comparison is sufficient because the words above the field are always zero.
  */
-int gf_equal(const gf_field_t *F, const gf_elem_t *a, const gf_elem_t *b)
+int gf_equal(const gf_field_t *field, const gf_elem_t *a, const gf_elem_t *b)
 {
-    (void)F;
+    (void)field;
     return memcmp(a, b, sizeof(*a)) == 0;
 }
 
@@ -99,45 +99,45 @@ int gf_equal(const gf_field_t *F, const gf_elem_t *a, const gf_elem_t *b)
  * r = a * b in E: polynomial multiplication reduced modulo f.
  *
  * Shift-and-add (Horner) multiplication processing b from its most significant bit:
- *    res <- res * x mod f;  if b_i = 1 then res <- res + a.
+ *    product <- product * x mod f;  if b_i = 1 then product <- product + a.
  * Multiplying by x shifts the bit vector by one position; if the shifted-out
  * coefficient of x^(N-1) was 1, x^N is replaced by f_low (the field polynomial
  * without its leading term), because x^N = f_low in characteristic 2. Cost O(N)
- * operations on nw = N/64 + 1 words; r may alias a or b.
+ * operations on N/64 + 1 words; r may alias a or b.
  */
-void gf_mul(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
+void gf_mul(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
 {
-    gf_elem_t res;
-    int top = (int)F->nw - 1;
+    gf_elem_t product;
+    int top_bit = (int)field->words - 1;
 
     /* leading zero bits of b would only shift the zero accumulator */
-    while (top >= 0 && b->w[top] == 0)
-        --top;
+    while (top_bit >= 0 && b->w[top_bit] == 0)
+        --top_bit;
 
-    if (top < 0) {
+    if (top_bit < 0) {
         gf_zero(r);
         return;
     }
 
-    gf_zero(&res);
-    top = top * 64 + 63;
-    while (!bit_get(b, (unsigned)top))
-        --top;
+    gf_zero(&product);
+    top_bit = top_bit * 64 + 63;
+    while (!bit_get(b, (unsigned)top_bit))
+        --top_bit;
 
-    for (int i = top; i >= 0; --i) {
-        const int carry = bit_get(&res, F->n - 1);
+    for (int i = top_bit; i >= 0; --i) {
+        const int carry = bit_get(&product, field->n - 1);
 
-        poly_shl1(&res, F->nw);
-        bit_clear(&res, F->n);
+        poly_shl1(&product, field->words);
+        bit_clear(&product, field->n);
 
         if (carry)
-            xor_into(&res, &F->f_low, F->nw);
+            xor_into(&product, &field->f_low, field->words);
 
         if (bit_get(b, (unsigned)i))
-            xor_into(&res, a, F->nw);
+            xor_into(&product, a, field->words);
     }
 
-    *r = res;
+    *r = product;
 }
 
 /*
@@ -147,17 +147,17 @@ void gf_mul(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a, const gf_elem
  * Cost 2N multiplications, so callers that need many inversions use batch
  * inversion (see gf_poly_interpolate).
  */
-void gf_inv(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a)
+void gf_inv(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a)
 {
-    gf_elem_t acc = *a;
+    gf_elem_t power = *a;
 
-    /* after the i-th round acc = a^(2^(i+1) - 1); the loop ends at 2^(n-1) - 1 */
-    for (unsigned i = 1; i + 1 < F->n; ++i) {
-        gf_mul(F, &acc, &acc, &acc);
-        gf_mul(F, &acc, &acc, a);
+    /* after the i-th round power = a^(2^(i+1) - 1); the loop ends at 2^(n-1) - 1 */
+    for (unsigned i = 1; i + 1 < field->n; ++i) {
+        gf_mul(field, &power, &power, &power);
+        gf_mul(field, &power, &power, a);
     }
 
-    gf_mul(F, r, &acc, &acc);
+    gf_mul(field, r, &power, &power);
 }
 
 /*
@@ -168,22 +168,22 @@ void gf_inv(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a)
  * at n = 64 and 30 ms at n = 256, with an irreducibility test such as Ben-Or's or
  * Rabin's), which is why the table was generated once and checked offline.
  */
-int gf_field_init(gf_field_t *F, unsigned n)
+int gf_field_init(gf_field_t *field, unsigned n)
 {
-    if (F == NULL || n < 2 || n > GF_MAX_BITS)
+    if (field == NULL || n < 2 || n > GF_MAX_BITS)
         return -1;
 
     const gf_irreducible_t *t = &gf_irreducible[n];
 
-    F->n = n;
-    F->nw = n / 64 + 1;
-    gf_zero(&F->f_low);
+    field->n = n;
+    field->words = n / 64 + 1;
+    gf_zero(&field->f_low);
 
-    bit_flip(&F->f_low, 0);
-    bit_flip(&F->f_low, t->a);
+    bit_flip(&field->f_low, 0);
+    bit_flip(&field->f_low, t->a);
     if (t->b != 0) {
-        bit_flip(&F->f_low, t->b);
-        bit_flip(&F->f_low, t->c);
+        bit_flip(&field->f_low, t->b);
+        bit_flip(&field->f_low, t->c);
     }
 
     return 0;
@@ -223,18 +223,18 @@ void gf_set_symbol(gf_elem_t *a, size_t i, unsigned m, uint32_t v)
  * r = P(x) for P = sum_{i<k} coeffs[i] X^i, by Horner's rule
  * P(x) = (...((c_{k-1} x + c_{k-2}) x + c_{k-3}) ...) x + c_0: k-1 multiplications.
  */
-void gf_poly_eval(const gf_field_t *F, gf_elem_t *r,
+void gf_poly_eval(const gf_field_t *field, gf_elem_t *r,
                   const gf_elem_t *coeffs, size_t k, const gf_elem_t *x)
 {
-    gf_elem_t acc;
-    gf_zero(&acc);
+    gf_elem_t value;
+    gf_zero(&value);
 
     for (size_t i = k; i-- > 0;) {
-        gf_mul(F, &acc, &acc, x);
-        gf_add(F, &acc, &acc, &coeffs[i]);
+        gf_mul(field, &value, &value, x);
+        gf_add(field, &value, &value, &coeffs[i]);
     }
 
-    *r = acc;
+    *r = value;
 }
 
 /*
@@ -253,7 +253,7 @@ void gf_poly_eval(const gf_field_t *F, gf_elem_t *r,
  * backwards. Total cost O(k^2) multiplications and one inversion; in characteristic 2
  * subtraction is addition.
  */
-int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
+int gf_poly_interpolate(const gf_field_t *field, gf_elem_t *coeffs,
                         const gf_elem_t *xs, const gf_elem_t *ys, size_t k)
 {
     if (k == 0)
@@ -263,7 +263,7 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
     gf_elem_t *Q = calloc(k, sizeof(gf_elem_t));
     gf_elem_t *inv_d = calloc(k, sizeof(gf_elem_t));   /* 1 / prod_{j != i} (x_i - x_j) */
     gf_elem_t *prefix = calloc(k, sizeof(gf_elem_t));
-    int rc = -1;
+    int result = -1;
 
     if (M == NULL || Q == NULL || inv_d == NULL || prefix == NULL)
         goto done;
@@ -272,11 +272,11 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
     M[0].w[0] = 1;
     for (size_t i = 0; i < k; ++i) {
         for (size_t j = i + 1; j > 0; --j) {
-            gf_elem_t t;
-            gf_mul(F, &t, &M[j], &xs[i]);
-            gf_add(F, &M[j], &M[j - 1], &t);
+            gf_elem_t term;
+            gf_mul(field, &term, &M[j], &xs[i]);
+            gf_add(field, &M[j], &M[j - 1], &term);
         }
-        gf_mul(F, &M[0], &M[0], &xs[i]);
+        gf_mul(field, &M[0], &M[0], &xs[i]);
     }
 
     /*
@@ -297,8 +297,8 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
             if (j == i)
                 continue;
 
-            gf_add(F, &diff, &xs[i], &xs[j]);
-            gf_mul(F, &d, &d, &diff);
+            gf_add(field, &diff, &xs[i], &xs[j]);
+            gf_mul(field, &d, &d, &diff);
         }
 
         if (gf_is_zero(&d))
@@ -308,13 +308,13 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
         if (i == 0)
             prefix[0] = d;
         else
-            gf_mul(F, &prefix[i], &prefix[i - 1], &d);
+            gf_mul(field, &prefix[i], &prefix[i - 1], &d);
     }
 
     {
         gf_elem_t total;
 
-        gf_inv(F, &total, &prefix[k - 1]);
+        gf_inv(field, &total, &prefix[k - 1]);
 
         for (size_t i = k; i-- > 0;) {
             gf_elem_t d = inv_d[i];
@@ -322,9 +322,9 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
             if (i == 0)
                 inv_d[0] = total;
             else
-                gf_mul(F, &inv_d[i], &total, &prefix[i - 1]);
+                gf_mul(field, &inv_d[i], &total, &prefix[i - 1]);
 
-            gf_mul(F, &total, &total, &d);
+            gf_mul(field, &total, &total, &d);
         }
     }
 
@@ -332,31 +332,31 @@ int gf_poly_interpolate(const gf_field_t *F, gf_elem_t *coeffs,
         gf_zero(&coeffs[j]);
 
     for (size_t i = 0; i < k; ++i) {
-        gf_elem_t f;
+        gf_elem_t weight;
 
         /* Q = M / (X - x_i) by synthetic division */
         Q[k - 1] = M[k];
         for (size_t j = k - 1; j > 0; --j) {
-            gf_elem_t t;
-            gf_mul(F, &t, &Q[j], &xs[i]);
-            gf_add(F, &Q[j - 1], &M[j], &t);
+            gf_elem_t term;
+            gf_mul(field, &term, &Q[j], &xs[i]);
+            gf_add(field, &Q[j - 1], &M[j], &term);
         }
 
-        gf_mul(F, &f, &ys[i], &inv_d[i]);
+        gf_mul(field, &weight, &ys[i], &inv_d[i]);
 
         for (size_t j = 0; j < k; ++j) {
-            gf_elem_t t;
-            gf_mul(F, &t, &Q[j], &f);
-            gf_add(F, &coeffs[j], &coeffs[j], &t);
+            gf_elem_t term;
+            gf_mul(field, &term, &Q[j], &weight);
+            gf_add(field, &coeffs[j], &coeffs[j], &term);
         }
     }
 
-    rc = 0;
+    result = 0;
 
 done:
     free(M);
     free(Q);
     free(inv_d);
     free(prefix);
-    return rc;
+    return result;
 }

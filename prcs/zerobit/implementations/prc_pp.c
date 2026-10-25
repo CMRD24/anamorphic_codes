@@ -20,158 +20,59 @@
  * the Hamming distance is at most delta n. A random word is far from every
  * codeword when C has a sparse enough set of codewords.
  *
- * The message x is the seed recovered by the decoder; the anamorphic randomness
- * recovery mode chooses it freely (encode_ws).
+ * The message x is the seed rho recovered by the decoder (and the substitution
+ * noise the further coins omega), so the randomness-recovery anamorphism can
+ * choose it freely (encode_with_seed).
  */
 
 #include "prc_pp.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stddef.h>
-#include <limits.h>
-#include <math.h>
-#include <stdio.h>
 
 #include "../../../utils/random_utils.h"
 
 
-/*
- * ================================================================
- * Key structures
- * ================================================================
- */
-
 struct ZBPRC_EncKey {
-
-    size_t n;
-    size_t q;
-    size_t symbol_bits;
-
-    /*
-     * sigma[i] determines the source symbol used at position i:
-     *
-     *     hat_c[i] = pi_i(c[sigma[i]])
-     */
-    size_t *sigma;
-
-    /*
-     * pi[i] is a permutation of {0,...,q-1}.
-     *
-     * pi[i][x] gives the image of x.
-     */
-    size_t **pi;
-
-    /*
-     * One-time pad, one q-ary symbol per position.
-     */
-    size_t *otp;
+    size_t *sigma;     /* hat_c[i] = pi[i][c[sigma[i]]] */
+    size_t **pi;       /* n permutations of {0, ..., q-1} */
+    size_t *pad;       /* the one-time pad o, one symbol per position */
 };
-
 
 struct ZBPRC_DecKey {
-
-    size_t n;
-    size_t q;
-    size_t symbol_bits;
-
     size_t *sigma;
-
-    /*
-     * Inverse permutations.
-     *
-     * pi_inv[i][x] = pi[i]^{-1}(x)
-     */
-    size_t **pi_inv;
-
-    size_t *otp;
+    size_t **pi_inverse;   /* pi_inverse[i] = pi[i]^-1 */
+    size_t *pad;
 };
 
 
-static int
-invert_permutation(
-    const size_t *p,
-    size_t q,
-    size_t *inv)
-{
-    for (size_t i = 0; i < q; i++)
-        inv[p[i]] = i;
-
-    return 0;
-}
-
-
 /*
- * ================================================================
- * Symbol serialization
- * ================================================================
- *
- * Symbols are packed consecutively, least-significant bit first.
- *
- * For example, for symbol_bits = 4:
- *
- *   symbols: a b c
- *
- * are represented as:
- *
- *   [a0 a1 a2 a3 | b0 b1 b2 b3 | c0 c1 c2 c3]
- *
- * q need not be a power of two. Values >= q are simply invalid.
+ * Symbols are packed consecutively, least significant bit first: for
+ * symbol_bits = 4 the symbols a b c are [a0 a1 a2 a3 | b0 b1 b2 b3 | c0 c1 c2 c3].
+ * q need not be a power of two; values >= q are invalid.
  */
-
-
-/*
- * Read one symbol.
- */
-static size_t
-get_symbol(
-    const uint8_t *buf,
-    size_t symbol_index,
-    size_t symbol_bits)
+static size_t get_symbol(const uint8_t *buf, size_t index, size_t symbol_bits)
 {
-    size_t bit_offset =
-        symbol_index * symbol_bits;
-
+    const size_t first_bit = index * symbol_bits;
     size_t value = 0;
 
     for (size_t j = 0; j < symbol_bits; j++) {
+        const size_t bit = first_bit + j;
 
-        size_t bit =
-            bit_offset + j;
-
-        uint8_t b =
-            (uint8_t)(
-                (buf[bit >> 3] >> (bit & 7)) & 1u
-            );
-
-        value |= b << j;
+        value |= (size_t)((buf[bit >> 3] >> (bit & 7)) & 1u) << j;
     }
 
     return value;
 }
 
-
-/*
- * Write one symbol.
- */
-static void
-set_symbol(
-    uint8_t *buf,
-    size_t symbol_index,
-    size_t symbol_bits,
-    size_t value)
+static void set_symbol(uint8_t *buf, size_t index, size_t symbol_bits, size_t value)
 {
-    size_t bit_offset =
-        symbol_index * symbol_bits;
+    const size_t first_bit = index * symbol_bits;
 
     for (size_t j = 0; j < symbol_bits; j++) {
-
-        size_t bit =
-            bit_offset + j;
-
-        uint8_t mask =
-            (uint8_t)(1u << (bit & 7));
+        const size_t bit = first_bit + j;
+        const uint8_t mask = (uint8_t)(1u << (bit & 7));
 
         if ((value >> j) & 1u)
             buf[bit >> 3] |= mask;
@@ -180,1096 +81,336 @@ set_symbol(
     }
 }
 
-
-/*
- * ================================================================
- * Size helpers
- * ================================================================
- */
-
-static int
-checked_symbol_bytes(
-    size_t n,
-    size_t symbol_bits,
-    size_t *bytes)
+/* bytes of a word of n symbols */
+static size_t word_bytes(const PPParams *params)
 {
-    if (symbol_bits == 0)
-        return -1;
-
-    if (n > SIZE_MAX / symbol_bits)
-        return -1;
-
-    size_t bits =
-        n * symbol_bits;
-
-    *bytes =
-        (bits + 7) / 8;
-
-    return 0;
+    return (params->n * params->symbol_bits + 7) / 8;
 }
 
-
-/*
- * ================================================================
- * Key generation
- * ================================================================
- */
-
-static ZBPRC_Keys *
-zbprc_pp_keygen(
-    const void *vparams,
-    RandomnessSource *random)
+static int valid_params(const PPParams *params)
 {
-    const PPParams *params =
-        vparams;
+    return params != NULL && params->ecc != NULL && params->q >= 2 && params->n > 0 &&
+           params->symbol_bits > 0 && params->symbol_bits < 8 * sizeof(size_t) &&
+           params->q <= ((size_t)1 << params->symbol_bits) &&
+           params->n <= SIZE_MAX / params->symbol_bits &&
+           ecc_encoded_size(params->ecc, params->seed_bytes) == word_bytes(params);
+}
 
-    if (!params ||
-        !params->ecc ||
-        !random ||
-        params->q < 2 ||
-        params->symbol_bits == 0 ||
-        params->n == 0)
+static size_t *copy_array(const size_t *array, size_t length)
+{
+    size_t *copy = malloc(length * sizeof(*copy));
+
+    if (copy != NULL)
+        memcpy(copy, array, length * sizeof(*copy));
+
+    return copy;
+}
+
+static void free_permutations(size_t **permutations, size_t n)
+{
+    if (permutations == NULL)
+        return;
+
+    for (size_t i = 0; i < n; i++)
+        free(permutations[i]);
+
+    free(permutations);
+}
+
+static void pp_free_enc_key(const void *params_ptr, ZBPRC_EncKey *enc_key)
+{
+    const PPParams *params = params_ptr;
+
+    if (enc_key == NULL)
+        return;
+
+    free(enc_key->sigma);
+    free(enc_key->pad);
+    free_permutations(enc_key->pi, params->n);
+    free(enc_key);
+}
+
+static void pp_free_dec_key(const void *params_ptr, ZBPRC_DecKey *dec_key)
+{
+    const PPParams *params = params_ptr;
+
+    if (dec_key == NULL)
+        return;
+
+    free(dec_key->sigma);
+    free(dec_key->pad);
+    free_permutations(dec_key->pi_inverse, params->n);
+    free(dec_key);
+}
+
+/* sigma, the pi_i and the pad o; the decoding key holds the inverses pi_i^-1 */
+static ZBPRC_Keys *pp_keygen(const void *params_ptr, RandomnessSource *random)
+{
+    const PPParams *params = params_ptr;
+
+    if (!valid_params(params) || random == NULL)
         return NULL;
 
-    /*
-     * q must fit in symbol_bits bits.
-     */
-    if (params->symbol_bits <
-        sizeof(size_t) * 8) {
+    const size_t n = params->n;
+    const size_t q = params->q;
+    ZBPRC_Keys *keys = calloc(1, sizeof(*keys));
 
-        size_t max_symbol =
-            ((size_t)1 << params->symbol_bits);
-
-        if (params->q > max_symbol)
-            return NULL;
-    }
-
-
-    size_t encoded_bytes;
-
-    if (checked_symbol_bytes(
-            params->n,
-            params->symbol_bits,
-            &encoded_bytes) != 0)
+    if (keys == NULL)
         return NULL;
 
+    keys->enc = calloc(1, sizeof(*keys->enc));
+    keys->dec = calloc(1, sizeof(*keys->dec));
 
-    /*
-     * The ECC's encoded representation must have exactly
-     * this many bytes.
-     */
-    if (ecc_encoded_size(
-            params->ecc,
-            params->message_bytes) != encoded_bytes)
-        return NULL;
-
-    /*
-     * sigma.
-     */
-    size_t *sigma =
-        malloc(params->n * sizeof(*sigma));
-
-    if (!sigma)
-        return NULL;
-
-    random_permutation(
-            random, sigma,
-            params->n);
-
-    /*
-     * pi and inverse pi.
-     */
-    size_t **pi =
-        calloc(params->n, sizeof(*pi));
-
-    size_t **pi_inv =
-        calloc(params->n, sizeof(*pi_inv));
-
-    if (!pi || !pi_inv)
+    if (keys->enc == NULL || keys->dec == NULL)
         goto fail;
 
-    for (size_t i = 0; i < params->n; i++) {
+    keys->enc->sigma = malloc(n * sizeof(size_t));
+    keys->enc->pad = malloc(n * sizeof(size_t));
+    keys->enc->pi = calloc(n, sizeof(size_t *));
+    keys->dec->pi_inverse = calloc(n, sizeof(size_t *));
 
-        pi[i] =
-            malloc(params->q * sizeof(size_t));
+    if (keys->enc->sigma == NULL || keys->enc->pad == NULL ||
+        keys->enc->pi == NULL || keys->dec->pi_inverse == NULL)
+        goto fail;
 
-        pi_inv[i] =
-            malloc(params->q * sizeof(size_t));
+    random_permutation(random, keys->enc->sigma, n);
 
-        if (!pi[i] || !pi_inv[i])
+    for (size_t i = 0; i < n; i++) {
+        keys->enc->pi[i] = malloc(q * sizeof(size_t));
+        keys->dec->pi_inverse[i] = malloc(q * sizeof(size_t));
+
+        if (keys->enc->pi[i] == NULL || keys->dec->pi_inverse[i] == NULL)
             goto fail;
 
-        random_permutation(
-                random,
-                pi[i], params->q);
+        random_permutation(random, keys->enc->pi[i], q);
 
-        invert_permutation(
-            pi[i],
-            params->q,
-            pi_inv[i]
-        );
+        for (size_t symbol = 0; symbol < q; symbol++)
+            keys->dec->pi_inverse[i][keys->enc->pi[i][symbol]] = symbol;
     }
 
-    /*
-     * q-ary OTP.
-     */
-    size_t *otp =
-        malloc(params->n * sizeof(*otp));
+    for (size_t i = 0; i < n; i++)
+        keys->enc->pad[i] = random_bounded(random, q);
 
-    if (!otp)
+    keys->dec->sigma = copy_array(keys->enc->sigma, n);
+    keys->dec->pad = copy_array(keys->enc->pad, n);
+
+    if (keys->dec->sigma == NULL || keys->dec->pad == NULL)
         goto fail;
-
-    for (size_t i = 0; i < params->n; i++) {
-
-        otp[i] = random_bounded(random, params->q);
-    }
-
-    /*
-     * Allocate key pair.
-     */
-    ZBPRC_Keys *keys =
-        calloc(1, sizeof(*keys));
-
-    if (!keys)
-        goto fail_otp;
-
-    keys->enc =
-        calloc(1, sizeof(*keys->enc));
-
-    keys->dec =
-        calloc(1, sizeof(*keys->dec));
-
-    if (!keys->enc || !keys->dec) {
-        free(keys->enc);
-        free(keys->dec);
-        free(keys);
-        goto fail_otp;
-    }
-
-    /*
-     * We copy sigma/pi because encryption and decryption keys
-     * are independently owned.
-     */
-    keys->enc->n = params->n;
-    keys->enc->q = params->q;
-    keys->enc->symbol_bits = params->symbol_bits;
-
-    keys->dec->n = params->n;
-    keys->dec->q = params->q;
-    keys->dec->symbol_bits = params->symbol_bits;
-
-    keys->enc->sigma =
-        malloc(params->n * sizeof(size_t));
-
-    keys->dec->sigma =
-        malloc(params->n * sizeof(size_t));
-
-    keys->enc->otp =
-        malloc(params->n * sizeof(size_t));
-
-    keys->dec->otp =
-        malloc(params->n * sizeof(size_t));
-
-    if (!keys->enc->sigma ||
-        !keys->dec->sigma ||
-        !keys->enc->otp ||
-        !keys->dec->otp)
-        goto fail_keys;
-
-    memcpy(
-        keys->enc->sigma,
-        sigma,
-        params->n * sizeof(size_t)
-    );
-
-    memcpy(
-        keys->dec->sigma,
-        sigma,
-        params->n * sizeof(size_t)
-    );
-
-    memcpy(
-        keys->enc->otp,
-        otp,
-        params->n * sizeof(size_t)
-    );
-
-    memcpy(
-        keys->dec->otp,
-        otp,
-        params->n * sizeof(size_t)
-    );
-
-    /*
-     * Copy permutations.
-     */
-    keys->enc->pi =
-        calloc(params->n, sizeof(size_t *));
-
-    keys->dec->pi_inv =
-        calloc(params->n, sizeof(size_t *));
-
-    if (!keys->enc->pi ||
-        !keys->dec->pi_inv)
-        goto fail_keys;
-
-    for (size_t i = 0; i < params->n; i++) {
-
-        keys->enc->pi[i] =
-            malloc(params->q * sizeof(size_t));
-
-        keys->dec->pi_inv[i] =
-            malloc(params->q * sizeof(size_t));
-
-        if (!keys->enc->pi[i] ||
-            !keys->dec->pi_inv[i])
-            goto fail_keys;
-
-        memcpy(
-            keys->enc->pi[i],
-            pi[i],
-            params->q * sizeof(size_t)
-        );
-
-        memcpy(
-            keys->dec->pi_inv[i],
-            pi_inv[i],
-            params->q * sizeof(size_t)
-        );
-    }
-
-    /*
-     * Clean temporary material.
-     */
-    free(sigma);
-    free(otp);
-
-    for (size_t i = 0; i < params->n; i++) {
-        free(pi[i]);
-        free(pi_inv[i]);
-    }
-
-    free(pi);
-    free(pi_inv);
 
     return keys;
 
-
-fail_keys:
-
-    if (keys) {
-
-        if (keys->enc) {
-            free(keys->enc->sigma);
-            free(keys->enc->otp);
-
-            if (keys->enc->pi) {
-                for (size_t i = 0; i < params->n; i++)
-                    free(keys->enc->pi[i]);
-
-                free(keys->enc->pi);
-            }
-        }
-
-        if (keys->dec) {
-            free(keys->dec->sigma);
-            free(keys->dec->otp);
-
-            if (keys->dec->pi_inv) {
-                for (size_t i = 0; i < params->n; i++)
-                    free(keys->dec->pi_inv[i]);
-
-                free(keys->dec->pi_inv);
-            }
-        }
-
-        free(keys->enc);
-        free(keys->dec);
-        free(keys);
-    }
-
-fail_otp:
-    free(otp);
-
 fail:
-
-    if (pi) {
-        for (size_t i = 0; i < params->n; i++)
-            free(pi[i]);
-
-        free(pi);
-    }
-
-    if (pi_inv) {
-        for (size_t i = 0; i < params->n; i++)
-            free(pi_inv[i]);
-
-        free(pi_inv);
-    }
-
-    free(sigma);
+    pp_free_enc_key(params, keys->enc);
+    pp_free_dec_key(params, keys->dec);
+    free(keys);
 
     return NULL;
 }
 
-
 /*
- * ================================================================
- * Symbol substitution channel
- * ================================================================
- *
- *
- * SC_p below implements the actual q-ary substitution channel:
- *
- * with probability p:
- *
- *     x -> uniformly random y in F_q \ {x}
- *
- * otherwise:
- *
- *     x -> x
- *
- * This is the channel specified by the PRC construction.
+ * The q-ary substitution channel SC_p on one symbol: with probability p the
+ * symbol is replaced by a uniform different symbol (a uniform value of [0, q-2]
+ * mapped to F_q \ {symbol}), otherwise it is kept. The uniform double in [0, 1)
+ * is formed from 53 random bits.
  */
-
-static int
-sample_substituted_symbol(
-    size_t x,
-    size_t q,
-    double probability,
-    RandomnessSource *random,
-    size_t *result)
+static size_t substitute_symbol(size_t symbol, size_t q, double probability,
+                                RandomnessSource *random)
 {
-    if (probability <= 0.0) {
-        *result = x;
-        return 0;
-    }
+    if (probability <= 0.0)
+        return symbol;
 
-    if (probability >= 1.0) {
+    const double uniform = (double)(random_u64(random) >> 11) / 9007199254740992.0;
 
-        size_t y = random_bounded(
-                random,
-                q - 1);
+    if (uniform >= probability)
+        return symbol;
 
-        /*
-         * Map [0,q-2] to F_q \ {x}.
-         */
-        *result =
-            (y >= x) ? y + 1 : y;
+    const size_t other = random_bounded(random, q - 1);
 
-        return 0;
-    }
-
-    /*
-     * Generate a uniform random double from 53 random bits.
-     */
-    uint64_t r;
-
-    random_bytes(
-            random,
-            (uint8_t *)&r,
-            sizeof(r));
-
-    double u =
-        (double)(r >> 11) *
-        (1.0 / 9007199254740992.0);
-
-    if (u >= probability) {
-        *result = x;
-        return 0;
-    }
-
-    size_t y = random_bounded(
-            random,
-            q - 1);
-
-    *result =
-        (y >= x) ? y + 1 : y;
-
-    return 0;
+    return other >= symbol ? other + 1 : other;
 }
 
-
-/*
- * ================================================================
- * Encode
- * ================================================================
- */
-
-
- uint8_t *
-zbprc_pp_encode_ws(
-    const void *vparams,
-    const ZBPRC_EncKey *key,
-    RandomnessSource *random,
-    size_t *output_bits,
-    const uint8_t *seed
-)
+/* Encode(enc_key; rho = x, omega): x is the seed of seed_bytes bytes */
+static uint8_t *pp_encode_with_seed(const void *params_ptr,
+                                    const ZBPRC_EncKey *enc_key,
+                                    RandomnessSource *random,
+                                    size_t *codeword_bits,
+                                    const uint8_t *seed)
 {
-    const PPParams *params =
-        vparams;
+    const PPParams *params = params_ptr;
 
-    if (!params ||
-        !params->ecc ||
-        !key ||
-        !random ||
-        !output_bits)
+    if (!valid_params(params) || enc_key == NULL || random == NULL ||
+        codeword_bits == NULL || seed == NULL)
         return NULL;
 
+    const size_t bytes = word_bytes(params);
+    uint8_t *ecc_codeword = calloc(bytes, 1);
+    uint8_t *codeword = calloc(bytes, 1);
+    size_t ecc_codeword_bytes = bytes;
 
-    size_t encoded_bytes;
+    if (ecc_codeword == NULL || codeword == NULL ||
+        ecc_encode(params->ecc, seed, params->seed_bytes, ecc_codeword,
+                   &ecc_codeword_bytes) != 0 ||
+        ecc_codeword_bytes != bytes)
+        goto fail;
 
-    if (checked_symbol_bytes(
-            key->n,
-            key->symbol_bits,
-            &encoded_bytes) != 0)
-        return NULL;
+    for (size_t i = 0; i < params->n; i++) {
+        size_t symbol = get_symbol(ecc_codeword, enc_key->sigma[i], params->symbol_bits);
 
-    uint8_t *encoded =
-        calloc(encoded_bytes, 1);
+        /* the ECC output must only contain symbols of F_q */
+        if (symbol >= params->q)
+            goto fail;
 
+        /* hat_c_i = pi_i(c_sigma(i)), then SC_{delta/2}, then + o_i */
+        symbol = enc_key->pi[i][symbol];
+        symbol = substitute_symbol(symbol, params->q, params->delta / 2.0, random);
+        symbol = (symbol + enc_key->pad[i]) % params->q;
 
-    if (!encoded) {
-        free(encoded);
-        return NULL;
+        set_symbol(codeword, i, params->symbol_bits, symbol);
     }
 
-    /*
-     * ------------------------------------------------------------
-     * 1. Sample x <- F_q^k and encode.
-     * ------------------------------------------------------------
-     *
-     * Since the ECC interface works on bytes, the random message
-     * is represented as message_bytes random bytes.
-     */
+    free(ecc_codeword);
+    *codeword_bits = params->n * params->symbol_bits;
 
+    return codeword;
 
-    size_t encoded_len =
-        encoded_bytes;
+fail:
+    free(ecc_codeword);
+    free(codeword);
 
-    if (ecc_encode(
-            params->ecc,
-            seed,
-            params->message_bytes,
-            encoded,
-            &encoded_len) != 0 ||
-        encoded_len != encoded_bytes) {
-
-        free(encoded);
-        return NULL;
-    }
-
-
-    /*
-     * ------------------------------------------------------------
-     * 2. sigma and pi_i.
-     *
-     *     hat_c_i = pi_i(c_{sigma(i)})
-     * ------------------------------------------------------------
-     */
-
-    uint8_t *permuted =
-        calloc(encoded_bytes, 1);
-
-    if (!permuted) {
-        free(encoded);
-        return NULL;
-    }
-
-    for (size_t i = 0; i < key->n; i++) {
-
-        size_t source =
-            key->sigma[i];
-
-        size_t symbol =
-            get_symbol(
-                encoded,
-                source,
-                key->symbol_bits
-            );
-
-        /*
-         * The ECC serialization must only contain valid
-         * F_q symbols.
-         */
-        if (symbol >= key->q) {
-            free(encoded);
-            free(permuted);
-            return NULL;
-        }
-
-        symbol =
-            key->pi[i][symbol];
-
-        set_symbol(
-            permuted,
-            i,
-            key->symbol_bits,
-            symbol
-        );
-    }
-
-    free(encoded);
-
-
-    /*
-     * ------------------------------------------------------------
-     * 3. SC_{delta/2}.
-     * ------------------------------------------------------------
-     */
-
-    uint8_t *noisy =
-        calloc(encoded_bytes, 1);
-
-    if (!noisy) {
-        free(permuted);
-        return NULL;
-    }
-
-    for (size_t i = 0; i < key->n; i++) {
-
-        size_t symbol =
-            get_symbol(
-                permuted,
-                i,
-                key->symbol_bits
-            );
-
-        size_t noisy_symbol;
-
-        if (sample_substituted_symbol(
-                symbol,
-                key->q,
-                params->delta / 2.0,
-                random,
-                &noisy_symbol) != 0) {
-
-            free(permuted);
-            free(noisy);
-            return NULL;
-        }
-
-        set_symbol(
-            noisy,
-            i,
-            key->symbol_bits,
-            noisy_symbol
-        );
-    }
-
-    free(permuted);
-
-
-    /*
-     * ------------------------------------------------------------
-     * 4. OTP:
-     *
-     *     c = c' + o
-     *
-     * over F_q.
-     * ------------------------------------------------------------
-     */
-
-    uint8_t *ciphertext =
-        calloc(encoded_bytes, 1);
-
-    if (!ciphertext) {
-        free(noisy);
-        return NULL;
-    }
-
-    for (size_t i = 0; i < key->n; i++) {
-
-        size_t symbol =
-            get_symbol(
-                noisy,
-                i,
-                key->symbol_bits
-            );
-
-        symbol =
-            (symbol + key->otp[i]) %
-            key->q;
-
-        set_symbol(
-            ciphertext,
-            i,
-            key->symbol_bits,
-            symbol
-        );
-    }
-
-    free(noisy);
-
-    *output_bits =
-        key->n * key->symbol_bits;
-
-    return ciphertext;
+    return NULL;
 }
 
+static uint8_t *pp_encode(const void *params_ptr,
+                          const ZBPRC_EncKey *enc_key,
+                          RandomnessSource *random,
+                          size_t *codeword_bits)
+{
+    const PPParams *params = params_ptr;
 
-static uint8_t *
-zbprc_pp_encode(
-    const void *vparams,
-    const ZBPRC_EncKey *key,
-    RandomnessSource *random,
-    size_t *output_bits
-){
-
-    const PPParams *params =
-        vparams;
-
-    uint8_t *message =
-        malloc(params->message_bytes);
-
-
-    if (!message) {
-        free(message);
+    if (!valid_params(params) || random == NULL)
         return NULL;
-    }
 
-    random_bytes(
-            random,
-            message,
-            params->message_bytes);
+    uint8_t *x = malloc(params->seed_bytes ? params->seed_bytes : 1);
 
-    uint8_t *encoded = zbprc_pp_encode_ws(vparams, key, random, output_bits, message);
+    if (x == NULL)
+        return NULL;
 
-    free(message);
-    return encoded;
+    random_bytes(random, x, params->seed_bytes);
+
+    uint8_t *codeword = pp_encode_with_seed(params, enc_key, random, codeword_bits, x);
+
+    free(x);
+
+    return codeword;
 }
 
-
 /*
- * ================================================================
- * Hamming distance over F_q
- * ================================================================
+ * RecDecode: removes the pad, undoes pi_i and sigma, decodes C to x (seed_out,
+ * seed_bytes bytes), re-encodes x and accepts iff the re-encoding differs from
+ * the received word of C in at most delta n symbols.
  */
-
-static size_t
-symbol_hamming_distance(
-    const uint8_t *a,
-    const uint8_t *b,
-    size_t n,
-    size_t symbol_bits)
+static int pp_recover_decode(const void *params_ptr,
+                             const ZBPRC_DecKey *dec_key,
+                             const uint8_t *codeword,
+                             size_t codeword_bits,
+                             uint8_t *seed_out)
 {
+    const PPParams *params = params_ptr;
+
+    if (!valid_params(params) || dec_key == NULL || codeword == NULL || seed_out == NULL ||
+        codeword_bits != params->n * params->symbol_bits)
+        return 0;
+
+    const size_t bytes = word_bytes(params);
+    uint8_t *received = calloc(bytes, 1);       /* the noisy word of C */
+    uint8_t *reencoded = calloc(bytes, 1);
+    size_t reencoded_bytes = bytes;
+    int accepted = 0;
+
+    if (received == NULL || reencoded == NULL)
+        goto done;
+
+    for (size_t i = 0; i < params->n; i++) {
+        size_t symbol = get_symbol(codeword, i, params->symbol_bits);
+
+        if (symbol >= params->q)
+            goto done;
+
+        /* c[sigma[i]] = pi_i^-1(hat_c[i] - o_i) */
+        symbol = (symbol + params->q - dec_key->pad[i]) % params->q;
+        set_symbol(received, dec_key->sigma[i], params->symbol_bits,
+                   dec_key->pi_inverse[i][symbol]);
+    }
+
+    if (ecc_decode(params->ecc, received, bytes, seed_out, params->seed_bytes) != 0 ||
+        ecc_encode(params->ecc, seed_out, params->seed_bytes, reencoded,
+                   &reencoded_bytes) != 0 ||
+        reencoded_bytes != bytes)
+        goto done;
+
     size_t distance = 0;
 
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < params->n; i++)
+        distance += get_symbol(received, i, params->symbol_bits) !=
+                    get_symbol(reencoded, i, params->symbol_bits);
 
-        size_t x =
-            get_symbol(
-                a,
-                i,
-                symbol_bits
-            );
+    accepted = (double)distance <= params->delta * (double)params->n;
 
-        size_t y =
-            get_symbol(
-                b,
-                i,
-                symbol_bits
-            );
-
-        if (x != y)
-            distance++;
-    }
-
-    return distance;
-}
-
-
-/*
- * ================================================================
- * Decode
- * ================================================================
- */
-
-
-int
-zbprc_pp_decode_ws(
-    const void *vparams,
-    const ZBPRC_DecKey *key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits,
-    uint8_t *seed_out
-    )
-{
-    const PPParams *params =
-        vparams;
-
-    if (!params ||
-        !params->ecc ||
-        !key ||
-        !ciphertext)
-        return 0;
-
-
-    size_t expected_bits =
-        key->n * key->symbol_bits;
-
-    if (ciphertext_bits != expected_bits)
-        return 0;
-
-
-    size_t encoded_bytes;
-
-    if (checked_symbol_bytes(
-            key->n,
-            key->symbol_bits,
-            &encoded_bytes) != 0)
-        return 0;
-
-
-    /*
-     * ------------------------------------------------------------
-     * 1. Remove OTP.
-     *
-     * For the Z_q representation:
-     *
-     *     c' = c - o mod q.
-     * ------------------------------------------------------------
-     */
-
-    uint8_t *unmasked =
-        calloc(encoded_bytes, 1);
-
-    if (!unmasked)
-        return 0;
-
-
-    for (size_t i = 0; i < key->n; i++) {
-
-        size_t c =
-            get_symbol(
-                ciphertext,
-                i,
-                key->symbol_bits
-            );
-
-        if (c >= key->q) {
-            free(unmasked);
-            return 0;
-        }
-
-        size_t symbol =
-            (c + key->q - key->otp[i]) %
-            key->q;
-
-        set_symbol(
-            unmasked,
-            i,
-            key->symbol_bits,
-            symbol
-        );
-    }
-
-
-    /*
-     * ------------------------------------------------------------
-     * 2. Undo sigma and pi.
-     *
-     * Encoding:
-     *
-     *     hat_c[i] = pi_i(c[sigma[i]])
-     *
-     * Therefore:
-     *
-     *     c[sigma[i]]
-     *       = pi_i^{-1}(hat_c[i]).
-     * ------------------------------------------------------------
-     */
-
-    uint8_t *codeword =
-        calloc(encoded_bytes, 1);
-
-    if (!codeword) {
-        free(unmasked);
-        return 0;
-    }
-
-
-    for (size_t i = 0; i < key->n; i++) {
-
-        size_t symbol =
-            get_symbol(
-                unmasked,
-                i,
-                key->symbol_bits
-            );
-
-        if (symbol >= key->q) {
-            free(unmasked);
-            free(codeword);
-            return 0;
-        }
-
-        symbol =
-            key->pi_inv[i][symbol];
-
-        set_symbol(
-            codeword,
-            key->sigma[i],
-            key->symbol_bits,
-            symbol
-        );
-    }
-
-
-    free(unmasked);
-
-
-    /*
-     * ------------------------------------------------------------
-     * 3. Decode C.
-     * ------------------------------------------------------------
-     */
-
-    size_t decoded_bytes =
-        ecc_decoded_size(
-            params->ecc,
-            encoded_bytes
-        );
-
-    if (decoded_bytes == 0) {
-        free(codeword);
-        return 0;
-    }
-
-
-    if (ecc_decode(
-            params->ecc,
-            codeword,
-            encoded_bytes,
-            seed_out,
-            decoded_bytes) != 0) {
-
-        free(codeword);
-        return 0;
-    }
-
-
-    /*
-     * ------------------------------------------------------------
-     * 4. Re-encode.
-     * ------------------------------------------------------------
-     */
-
-    uint8_t *reencoded =
-        calloc(encoded_bytes, 1);
-
-    if (!reencoded) {
-        free(codeword);
-        return 0;
-    }
-
-
-    size_t reencoded_len =
-        encoded_bytes;
-
-    if (ecc_encode(
-            params->ecc,
-            seed_out,
-            decoded_bytes,
-            reencoded,
-            &reencoded_len) != 0 ||
-        reencoded_len != encoded_bytes) {
-
-        free(codeword);
-        free(reencoded);
-        return 0;
-    }
-
-
-    /*
-     * ------------------------------------------------------------
-     * 5. Check
-     *
-     *     D_H(hat_c,c'') <= delta*n.
-     * ------------------------------------------------------------
-     */
-
-    size_t distance =
-        symbol_hamming_distance(
-            reencoded,
-            codeword,
-            key->n,
-            key->symbol_bits
-        );
-
-    free(codeword);
+done:
+    free(received);
     free(reencoded);
 
-    if ((double)distance >
-        params->delta * (double)key->n)
-        return 0;
-
-
-    return 1;
+    return accepted;
 }
 
-
-static int
-zbprc_pp_decode(
-    const void *vparams,
-    const ZBPRC_DecKey *key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits
-    ){
-
-        const PPParams *params =
-        vparams;
-
-        size_t encoded_bytes;
-
-    if (checked_symbol_bytes(
-            key->n,
-            key->symbol_bits,
-            &encoded_bytes) != 0)
-        return 0;
-
-    size_t decoded_bytes =
-        ecc_decoded_size(
-            params->ecc,
-            encoded_bytes
-        );
-
-    if (decoded_bytes == 0) {
-        return 0;
-    }
-
-        uint8_t *seed =
-        malloc(decoded_bytes);
-
-        if (!seed) {
-            return 0;
-        }
-
-        int decoded = zbprc_pp_decode_ws(vparams, key, ciphertext, ciphertext_bits, seed);
-
-        /* regular decoding ignores the recovered message x */
-        free(seed);
-
-        return decoded;
-
-}
-
-
-/*
- * ================================================================
- * Destruction
- * ================================================================
- */
-
-static void
-zbprc_pp_free_enc_key(
-    const void *vparams,
-    ZBPRC_EncKey *key)
+/* the regular decoder discards the recovered x */
+static int pp_decode(const void *params_ptr,
+                     const ZBPRC_DecKey *dec_key,
+                     const uint8_t *codeword,
+                     size_t codeword_bits)
 {
-    (void)vparams;
+    const PPParams *params = params_ptr;
 
-    if (!key)
-        return;
-
-    free(key->sigma);
-    free(key->otp);
-
-    if (key->pi) {
-        for (size_t i = 0; i < key->n; i++)
-            free(key->pi[i]);
-
-        free(key->pi);
-    }
-
-    free(key);
-}
-
-
-static void
-zbprc_pp_free_dec_key(
-    const void *vparams,
-    ZBPRC_DecKey *key)
-{
-    (void)vparams;
-
-    if (!key)
-        return;
-
-    free(key->sigma);
-    free(key->otp);
-
-    if (key->pi_inv) {
-        for (size_t i = 0; i < key->n; i++)
-            free(key->pi_inv[i]);
-
-        free(key->pi_inv);
-    }
-
-    free(key);
-}
-
-
-/*
- * ================================================================
- * Blocksize
- * ================================================================
- */
-
-static size_t
-zbprc_pp_blocksize(
-    const void *vparams)
-{
-    const PPParams *params =
-        vparams;
-
-    if (!params)
+    if (!valid_params(params))
         return 0;
 
-    if (params->n >
-        SIZE_MAX / params->symbol_bits)
+    uint8_t *x = malloc(params->seed_bytes ? params->seed_bytes : 1);
+
+    if (x == NULL)
         return 0;
+
+    const int accepted = pp_recover_decode(params, dec_key, codeword, codeword_bits, x);
+
+    free(x);
+
+    return accepted;
+}
+
+static size_t pp_block_length(const void *params_ptr)
+{
+    const PPParams *params = params_ptr;
 
     return params->n * params->symbol_bits;
 }
 
-
-/*
- * ================================================================
- * Initialization
- * ================================================================
- */
-
-ZBPRC
-prc_pp(
-   const PPParams *params)
+ZBPRC prc_pp(const PPParams *params)
 {
-    ZBPRC prc = {
+    return (ZBPRC){
         .params = params,
-
-        .decode = zbprc_pp_decode,
-        .encode = zbprc_pp_encode,
-        .blocksize = zbprc_pp_blocksize,
-        .keygen = zbprc_pp_keygen,
-        .free_dec_key = zbprc_pp_free_dec_key,
-        .free_enc_key = zbprc_pp_free_enc_key
+        .block_length = pp_block_length,
+        .keygen = pp_keygen,
+        .encode = pp_encode,
+        .decode = pp_decode,
+        .free_enc_key = pp_free_enc_key,
+        .free_dec_key = pp_free_dec_key,
     };
-
-    return prc;
-
 }
 
-
-ZBPRC_RR
-prc_pp_rr(
-   const PPParams *params)
+ZBPRC_RR prc_pp_rr(const PPParams *params)
 {
-    ZBPRC_RR prc_rr = {
-
+    return (ZBPRC_RR){
         .base = prc_pp(params),
-        .decode_ws = zbprc_pp_decode_ws,
-        .encode_ws = zbprc_pp_encode_ws
+        .encode_with_seed = pp_encode_with_seed,
+        .recover_decode = pp_recover_decode,
     };
-
-    return prc_rr;
-
 }
