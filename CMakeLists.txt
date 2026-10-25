@@ -25,6 +25,7 @@ set(CMAKE_C_FLAGS_RELEASE "-O3")
 
 find_library(SODIUM_LIBRARY sodium REQUIRED)
 find_library(M_LIBRARY m REQUIRED)
+find_library(M4RI_LIBRARY m4ri REQUIRED)   # dense linear algebra over GF(2)
 find_package(OpenSSL)
 
 
@@ -49,6 +50,7 @@ target_include_directories(prc_utils PUBLIC
 
 target_link_libraries(prc_utils PUBLIC
     ${SODIUM_LIBRARY}
+    ${M4RI_LIBRARY}
     ${M_LIBRARY}
 )
 

@@ -19,6 +19,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 #include "../utils/random_utils.h"
 
 /*
@@ -76,82 +77,65 @@ static size_t symbol_count(const rlnc_config_t *cfg)
 
 
 /* -------------------------------------------------------------------------
- * GF(2^m)
+ * GF(2^m) by table lookup
+ *
+ * For q <= 256 the full multiplication table has q^2 <= 65536 entries, so every
+ * product is a single lookup (the classic table method for small binary fields,
+ * cf. J. S. Plank, "A tutorial on Reed-Solomon coding for fault-tolerance in
+ * RAID-like systems", Software: Practice and Experience 27(9), 1997). The tables
+ * are built once from logarithm / antilogarithm tables: the field polynomials are
+ * primitive, so every non-zero element is a power x^i of the generator x, and
+ * x^i * x^j = x^((i + j) mod (q - 1)).
  * ------------------------------------------------------------------------- */
 
-static uint32_t gf_add(uint32_t a, uint32_t b)
+static uint8_t *mul_tables[9];        /* [m][a * 2^m + b] = a * b in GF(2^m) */
+static uint8_t inv_tables[9][256];    /* [m][a] = 1 / a (0 for a = 0) */
+static once_flag tables_once = ONCE_FLAG_INIT;
+
+static void build_tables(void)
 {
-    /* addition in characteristic 2 is the XOR of the coefficient vectors */
-    return a ^ b;
-}
+    for (unsigned m = 1; m <= 8; ++m) {
+        const uint32_t q = 1u << m, poly = gf_polynomial(q);
+        uint8_t exp[2 * 256], log[256] = {0};
+        uint32_t x = 1;
 
-/*
- * a * b in GF(q): polynomial product modulo the field polynomial.
- */
-static uint32_t gf_mul(
-    uint32_t a,
-    uint32_t b,
-    uint32_t q)
-{
-    const unsigned m = field_bits(q);
-    const uint32_t polynomial = gf_polynomial(q);
+        /* exp[i] = x^i, log[x^i] = i, by repeated multiplication with x */
+        for (uint32_t i = 0; i < q - 1; ++i) {
+            exp[i] = (uint8_t)x;
+            log[x] = (uint8_t)i;
+            x <<= 1;
+            if (x & q)
+                x ^= poly;
+        }
+        for (uint32_t i = q - 1; i < 2 * (q - 1); ++i)
+            exp[i] = exp[i - (q - 1)];
 
-    uint32_t result = 0;
+        mul_tables[m] = calloc(q * q, 1);
+        if (mul_tables[m] == NULL)
+            abort();
 
-    /*
-     * Shift-and-add ("Russian peasant") multiplication: for every bit b_i of b
-     * add a * x^i to the result, where a * x is a shift of a by one position
-     * followed by a reduction modulo the field polynomial if the coefficient of
-     * x^(m-1) was shifted out.
-     */
-    for (unsigned i = 0; i < m; ++i) {
-        if (b & 1u)
-            result ^= a;
+        for (uint32_t u = 1; u < q; ++u) {
+            for (uint32_t v = 1; v < q; ++v)
+                mul_tables[m][u * q + v] = exp[log[u] + log[v]];
 
-        b >>= 1;
-
-        const uint32_t carry = a & (1u << (m - 1));
-
-        a <<= 1;
-
-        if (carry)
-            a ^= polynomial;
+            inv_tables[m][u] = exp[(q - 1 - log[u]) % (q - 1)];
+        }
     }
-
-    return result & (q - 1);
 }
 
-/*
- * a^exponent in GF(q) by square-and-multiply (binary exponentiation), O(log exponent) multiplications.
- */
-static uint32_t gf_pow(
-    uint32_t a,
-    uint32_t exponent,
-    uint32_t q)
+/* row a of the multiplication table: row[b] = a * b */
+static const uint8_t *gf_mul_row(uint32_t a, uint32_t q)
 {
-    uint32_t result = 1;
+    call_once(&tables_once, build_tables);
 
-    while (exponent != 0) {
-        if (exponent & 1u)
-            result = gf_mul(result, a, q);
-
-        a = gf_mul(a, a, q);
-        exponent >>= 1;
-    }
-
-    return result;
+    return mul_tables[field_bits(q)] + a * q;
 }
 
-/*
- * 1/a in GF(q) (0 for a = 0).
- */
 static uint32_t gf_inv(uint32_t a, uint32_t q)
 {
-    if (a == 0)
-        return 0;
+    call_once(&tables_once, build_tables);
 
-    /* Fermat: a^(q-1) = 1 for a != 0 in GF(q), hence a^(-1) = a^(q-2) */
-    return gf_pow(a, q - 2, q);
+    return inv_tables[field_bits(q)][a];
 }
 
 
@@ -218,6 +202,58 @@ static void set_symbol(
         data[byte_offset + 1] |=
             (uint8_t)(value >> (8 - shift));
     }
+}
+
+
+/* dst[i] += a * src[i] over GF(q) (the row operation of encoding and elimination) */
+static void gf_axpy(uint8_t *dst, const uint8_t *src, size_t len, uint32_t a, uint32_t q)
+{
+    if (a == 0)
+        return;
+
+    if (a == 1) {
+        for (size_t i = 0; i < len; ++i)
+            dst[i] ^= src[i];
+        return;
+    }
+
+    const uint8_t *mul = gf_mul_row(a, q);
+
+    for (size_t i = 0; i < len; ++i)
+        dst[i] ^= mul[src[i]];
+}
+
+/* v[i] = a * v[i] over GF(q) */
+static void gf_scale(uint8_t *v, size_t len, uint32_t a, uint32_t q)
+{
+    const uint8_t *mul = gf_mul_row(a, q);
+
+    for (size_t i = 0; i < len; ++i)
+        v[i] = mul[v[i]];
+}
+
+/* the symbols of a payload, one GF(q) element per byte */
+static void unpack_symbols(const uint8_t *payload, unsigned m, size_t symbols, uint8_t *out)
+{
+    if (m == 8) {
+        memcpy(out, payload, symbols);
+        return;
+    }
+
+    for (size_t i = 0; i < symbols; ++i)
+        out[i] = (uint8_t)get_symbol(payload, i, m);
+}
+
+/* inverse of unpack_symbols; payload must be zeroed */
+static void pack_symbols(const uint8_t *in, unsigned m, size_t symbols, uint8_t *payload)
+{
+    if (m == 8) {
+        memcpy(payload, in, symbols);
+        return;
+    }
+
+    for (size_t i = 0; i < symbols; ++i)
+        set_symbol(payload, i, m, in[i]);
 }
 
 
@@ -328,97 +364,48 @@ int rlnc_encode_with_vector(
     const uint8_t *local_vector,
     rlnc_packet_t *out)
 {
-    if (!rlnc_config_valid(cfg) ||
-        packets == NULL ||
-        local_vector == NULL ||
-        out == NULL)
-        return -1;
-
-    if (packet_count == 0)
+    if (!rlnc_config_valid(cfg) || packets == NULL || local_vector == NULL ||
+        out == NULL || packet_count == 0)
         return -1;
 
     const unsigned m = field_bits(cfg->q);
     const size_t symbols = symbol_count(cfg);
+    uint8_t *acc = NULL, *tmp = NULL;
 
     memset(out->payload, 0, cfg->packet_size);
     memset(out->global, 0, cfg->generation_size);
 
-    /*
-     * Accumulate the coded payload as GF(q) symbols.
-     *
-     * We cannot accumulate directly into the byte array because
-     * GF(q) symbols may cross byte boundaries when m does not
-     * divide 8.
-     */
-    uint32_t *coded_symbols =
-        calloc(symbols, sizeof(uint32_t));
+    /* symbols of fewer than 8 bits are combined unpacked, one per byte */
+    if (m != 8) {
+        acc = calloc(symbols, 1);
+        tmp = malloc(symbols);
 
-    if (coded_symbols == NULL)
-        return -1;
+        if (acc == NULL || tmp == NULL) {
+            free(acc);
+            free(tmp);
+            return -1;
+        }
+    }
 
-    /*
-     * u' = sum_j alpha_j * u_j
-     *
-     * gamma' = sum_j alpha_j * gamma_j
-     */
+    /* gamma' = sum_j alpha_j gamma_j,  u' = sum_j alpha_j u_j */
     for (size_t j = 0; j < packet_count; ++j) {
         const uint32_t alpha = local_vector[j];
 
-        /*
-         * Compute the global encoding vector:
-         *
-         * gamma' = sum_j alpha_j * gamma_j
-         */
-        for (size_t k = 0; k < cfg->generation_size; ++k) {
-            const uint32_t product =
-                gf_mul(
-                    alpha,
-                    packets[j].global[k],
-                    cfg->q);
+        gf_axpy(out->global, packets[j].global, cfg->generation_size, alpha, cfg->q);
 
-            out->global[k] =
-                (uint8_t)gf_add(
-                    out->global[k],
-                    product);
-        }
-
-        /*
-         * Compute the coded payload:
-         *
-         * u' = sum_j alpha_j * u_j
-         */
-        for (size_t i = 0; i < symbols; ++i) {
-            const uint32_t value =
-                get_symbol(
-                    packets[j].payload,
-                    i,
-                    m);
-
-            const uint32_t product =
-                gf_mul(
-                    alpha,
-                    value,
-                    cfg->q);
-
-            coded_symbols[i] =
-                gf_add(
-                    coded_symbols[i],
-                    product);
+        if (m == 8) {
+            gf_axpy(out->payload, packets[j].payload, cfg->packet_size, alpha, cfg->q);
+        } else {
+            unpack_symbols(packets[j].payload, m, symbols, tmp);
+            gf_axpy(acc, tmp, symbols, alpha, cfg->q);
         }
     }
 
-    /*
-     * Pack the resulting GF(q) symbols back into bytes.
-     */
-    for (size_t i = 0; i < symbols; ++i) {
-        set_symbol(
-            out->payload,
-            i,
-            m,
-            coded_symbols[i]);
-    }
+    if (m != 8)
+        pack_symbols(acc, m, symbols, out->payload);
 
-    free(coded_symbols);
+    free(acc);
+    free(tmp);
 
     return 0;
 }
@@ -496,7 +483,7 @@ int rlnc_encode(
  *
  * Solves the linear system [gamma_j | u_j] over GF(q) by Gauss-Jordan elimination
  * on the augmented matrix whose rows are the received global vectors followed by
- * the payloads: for each column find a row with a non-zero entry, normalise it with
+ * the payload symbols: for each column find a row with a non-zero entry, normalise it with
  * the inverse of the pivot, and eliminate the column from all other rows. When the
  * left part is the identity the right part holds w_1..w_K. All received rows
  * are used, so a surplus of symbols compensates for dependent ones. Returns -1 if
@@ -509,139 +496,72 @@ int rlnc_decode(
     size_t received_count,
     rlnc_packet_t *out)
 {
-    if (!rlnc_config_valid(cfg) ||
-        received == NULL ||
-        out == NULL)
-        return -1;
-
-    if (received_count < cfg->generation_size)
+    if (!rlnc_config_valid(cfg) || received == NULL || out == NULL ||
+        received_count < cfg->generation_size)
         return -1;
 
     const size_t K = cfg->generation_size;
     const size_t R = received_count;
     const unsigned m = field_bits(cfg->q);
     const size_t symbols = symbol_count(cfg);
+    const size_t width = K + symbols;
+    int rc = -1;
 
     /*
-     * Work on all received packets: the first K need not be independent.
-     *
-     * Each row consists of:
-     *
-     *     [ global vector | payload symbols ]
+     * Augmented matrix, one row per received symbol (all of them: the first K
+     * need not be independent): [ global vector | payload symbols ], one GF(q)
+     * element per byte.
      */
-    uint32_t **matrix =
-        calloc(R, sizeof(uint32_t *));
+    uint8_t *data = malloc(R * width);
+    uint8_t **row = malloc(R * sizeof(*row));
 
-    if (matrix == NULL)
-        return -1;
+    if (data == NULL || row == NULL)
+        goto done;
 
     for (size_t r = 0; r < R; ++r) {
-        matrix[r] =
-            calloc(K + symbols, sizeof(uint32_t));
-
-        if (matrix[r] == NULL) {
-            for (size_t i = 0; i < r; ++i)
-                free(matrix[i]);
-
-            free(matrix);
-            return -1;
-        }
-
-        /*
-         * Global encoding vector.
-         */
-        for (size_t c = 0; c < K; ++c)
-            matrix[r][c] = received[r].global[c];
-
-        /*
-         * Payload represented as GF(q) symbols.
-         */
-        for (size_t i = 0; i < symbols; ++i)
-            matrix[r][K + i] =
-                get_symbol(received[r].payload, i, m);
+        row[r] = data + r * width;
+        memcpy(row[r], received[r].global, K);
+        unpack_symbols(received[r].payload, m, symbols, row[r] + K);
     }
 
-    /*
-     * Gauss-Jordan elimination.
-     *
-     * We never swap columns. Instead, we search for a row containing
-     * a non-zero value in the current pivot column and swap rows.
-     */
+    /* Gauss-Jordan elimination; rows are swapped, columns never */
     for (size_t col = 0; col < K; ++col) {
         size_t pivot = col;
 
-        while (pivot < R && matrix[pivot][col] == 0)
+        while (pivot < R && row[pivot][col] == 0)
             ++pivot;
 
-        if (pivot == R) {
-            /*
-             * The received global vectors are not linearly independent.
-             */
-            for (size_t i = 0; i < R; ++i)
-                free(matrix[i]);
+        if (pivot == R)
+            goto done;      /* the global vectors do not have rank K */
 
-            free(matrix);
-            return -1;
-        }
+        uint8_t *tmp = row[col];
+        row[col] = row[pivot];
+        row[pivot] = tmp;
 
-        if (pivot != col) {
-            uint32_t *tmp = matrix[col];
-            matrix[col] = matrix[pivot];
-            matrix[pivot] = tmp;
-        }
+        /* normalise the pivot to 1 */
+        gf_scale(row[col] + col, width - col, gf_inv(row[col][col], cfg->q), cfg->q);
 
-        /*
-         * Normalize pivot to 1.
-         */
-        const uint32_t inverse =
-            gf_inv(matrix[col][col], cfg->q);
-
-        for (size_t j = col; j < K + symbols; ++j) {
-            matrix[col][j] =
-                gf_mul(matrix[col][j], inverse, cfg->q);
-        }
-
-        /*
-         * Eliminate this column from all other rows.
-         */
-        for (size_t row = 0; row < R; ++row) {
-            if (row == col)
-                continue;
-
-            const uint32_t factor = matrix[row][col];
-
-            if (factor == 0)
-                continue;
-
-            for (size_t j = col; j < K + symbols; ++j) {
-                const uint32_t product =
-                    gf_mul(factor, matrix[col][j], cfg->q);
-
-                matrix[row][j] =
-                    gf_add(matrix[row][j], product);
-            }
+        /* eliminate the column from all other rows */
+        for (size_t r = 0; r < R; ++r) {
+            if (r != col && row[r][col] != 0)
+                gf_axpy(row[r] + col, row[col] + col, width - col, row[r][col], cfg->q);
         }
     }
 
-    for (size_t row = 0; row < K; ++row) {
-    memset(out[row].payload, 0, cfg->packet_size);
+    /* row k now reads [ e_k | w_k ] */
+    for (size_t k = 0; k < K; ++k) {
+        memset(out[k].payload, 0, cfg->packet_size);
+        pack_symbols(row[k] + K, m, symbols, out[k].payload);
 
-    for (size_t i = 0; i < symbols; ++i) {
-        set_symbol(
-            out[row].payload,
-            i,
-            m,
-            matrix[row][K + i]);
+        memset(out[k].global, 0, K);
+        out[k].global[k] = 1;
     }
 
-    memset(out[row].global, 0, K);
-    out[row].global[row] = 1;
-    }
+    rc = 0;
 
-    for (size_t i = 0; i < R; ++i)
-        free(matrix[i]);
+done:
+    free(row);
+    free(data);
 
-    free(matrix);
-
-    return 0;
+    return rc;
 }

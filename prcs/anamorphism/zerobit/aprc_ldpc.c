@@ -104,7 +104,7 @@ ldpc_num_anamorphic_checks(const LDPCParams *params)
  * Anamorphic key generation. Samples P' (r' = g/2 rows) until P'G has full row
  * rank r' (an r' x g matrix with independent random columns has full rank except
  * with probability about 2^(r' - g), so a few attempts suffice), then computes a
- * basis B of ker(P'G) by Gauss-Jordan elimination (kernel_basis). Returns the
+ * basis B of ker(P'G) (packed_g_kernel). Returns the
  * double key B and the trapdoor key P'; the regular keys are only read (G).
  */
 APRC_Keys *
@@ -175,14 +175,7 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
 
         PackedG PpG = sparse_p_mul_packed_g(&P_prime, &reg_keys->enc->G);
 
-        /*
-         * Compute ker(P'G).
-         */
-        PackedMatrix temp = packed_g_to_matrix(&PpG);
-
-        kerPpG = kernel_basis(&temp);
-
-        packed_matrix_free(&temp);
+        kerPpG = packed_g_kernel(&PpG);
         packed_g_free(&PpG);
 
         full_rank = (kerPpG.dimension + r_prime == params->g);
@@ -223,8 +216,6 @@ ldpc_akeygen(const void *params_ptr, const void *aparams_ptr, ZBPRC_Keys *reg_ke
 
     *dk->dec->P_prime = P_prime;
 
-
-    //packed_matrix_free(A);
 
     return dk;
 

@@ -1,4 +1,5 @@
 #include "gf_ext.h"
+#include "gf_irreducible.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,8 +18,7 @@
  */
 
 /* -------------------------------------------------------------------------
- * Polynomials over GF(2) as bit vectors (any degree <= GF_MAX_BITS); used to
- * test irreducibility of the field polynomial
+ * Bits of an element
  * ------------------------------------------------------------------------- */
 
 static int bit_get(const gf_elem_t *a, unsigned i)
@@ -36,74 +36,12 @@ static void bit_clear(gf_elem_t *a, unsigned i)
     a->w[i / 64] &= ~((uint64_t)1 << (i % 64));
 }
 
-/*
- * Degree of the polynomial a; -1 for the zero polynomial.
- */
-static int poly_deg(const gf_elem_t *a)
-{
-    for (int i = GF_WORDS - 1; i >= 0; --i) {
-        if (a->w[i] != 0) {
-            int b = 63;
-            while (!((a->w[i] >> b) & 1u))
-                --b;
-            return i * 64 + b;
-        }
-    }
-    return -1;
-}
-
 /* a *= x (shift of the bit vector by one position) on the lowest nw words */
 static void poly_shl1(gf_elem_t *a, unsigned nw)
 {
     for (unsigned i = nw - 1; i > 0; --i)
         a->w[i] = (a->w[i] << 1) | (a->w[i - 1] >> 63);
     a->w[0] <<= 1;
-}
-
-/*
- * a += x^s * b over GF(2): the XOR of b shifted left by s bits (one step of the polynomial long division).
- */
-/* a ^= b << s */
-static void poly_xor_shifted(gf_elem_t *a, const gf_elem_t *b, unsigned s)
-{
-    const unsigned ws = s / 64, bs = s % 64;
-
-    for (int i = GF_WORDS - 1; i >= (int)ws; --i) {
-        uint64_t v = b->w[i - ws] << bs;
-
-        if (bs != 0 && i - (int)ws - 1 >= 0)
-            v |= b->w[i - ws - 1] >> (64 - bs);
-
-        a->w[i] ^= v;
-    }
-}
-
-/*
- * a = a mod b over GF(2) by schoolbook long division: while deg a >= deg b, subtract
- * (= XOR) the shifted divisor x^(deg a - deg b) * b, which cancels the leading term.
- */
-static void poly_mod(gf_elem_t *a, const gf_elem_t *b)
-{
-    const int db = poly_deg(b);
-    int da;
-
-    while ((da = poly_deg(a)) >= db)
-        poly_xor_shifted(a, b, (unsigned)(da - db));
-}
-
-/*
- * Degree of gcd(a, b) over GF(2), by the Euclidean algorithm (gcd(a, b) = gcd(b, a mod b)).
- * The arguments are taken by value because the algorithm overwrites them.
- */
-static int poly_gcd_degree(gf_elem_t a, gf_elem_t b)
-{
-    while (poly_deg(&b) >= 0) {
-        poly_mod(&a, &b);
-        gf_elem_t t = a;
-        a = b;
-        b = t;
-    }
-    return poly_deg(&a);
 }
 
 
@@ -121,7 +59,12 @@ void gf_zero(gf_elem_t *a)
  */
 int gf_is_zero(const gf_elem_t *a)
 {
-    return poly_deg(a) < 0;
+    for (unsigned i = 0; i < GF_WORDS; ++i) {
+        if (a->w[i] != 0)
+            return 0;
+    }
+
+    return 1;
 }
 
 /* a += b over GF(2) (XOR) on the lowest nw words */
@@ -218,97 +161,30 @@ void gf_inv(const gf_field_t *F, gf_elem_t *r, const gf_elem_t *a)
 }
 
 /*
- * Is f = x^N + f_low irreducible over GF(2)? Ben-Or's test (M. Ben-Or, "Probabilistic
- * algorithms in finite fields", FOCS 1981; see J. von zur Gathen, J. Gerhard, "Modern
- * Computer Algebra", chapter 14): f of degree N is irreducible iff
- * gcd(f, x^(2^i) - x) = 1 for all 1 <= i <= N/2, because an irreducible factor of
- * degree d divides x^(2^d) - x. h is updated by squaring modulo f: h = x^(2^i) mod f.
- */
-static int is_irreducible(const gf_field_t *F)
-{
-    gf_elem_t f = F->f_low;
-    bit_flip(&f, F->n);
-
-    gf_elem_t x, h;
-    gf_zero(&x);
-    bit_flip(&x, 1);
-    h = x;
-
-    for (unsigned i = 1; i <= F->n / 2; ++i) {
-        gf_mul(F, &h, &h, &h);
-
-        gf_elem_t g;
-        gf_add(F, &g, &h, &x);
-
-        if (poly_gcd_degree(f, g) > 0)
-            return 0;
-    }
-
-    return 1;
-}
-
-/*
- * Finds the field polynomial of degree n. The candidates are tried in a fixed order
- * (trinomials, then pentanomials, in lexicographic order of the exponents), so that
- * every party that calls this with the same n obtains the same field. Irreducible
- * trinomials or pentanomials exist for all degrees that occur in practice
- * (Hankerson et al., table of irreducible polynomials); the search fails (-1) if
- * there is none.
- */
-static int gf_field_search(gf_field_t *F, unsigned n)
-{
-    F->n = n;
-    F->nw = n / 64 + 1;
-
-    /* trinomials x^n + x^k + 1 first (cheapest to reduce by) */
-    for (unsigned k = 1; k < n; ++k) {
-        gf_zero(&F->f_low);
-        bit_flip(&F->f_low, k);
-        bit_flip(&F->f_low, 0);
-
-        if (is_irreducible(F))
-            return 0;
-    }
-
-    /* then pentanomials x^n + x^c + x^b + x^a + 1 */
-    for (unsigned c = 3; c < n; ++c)
-        for (unsigned b = 2; b < c; ++b)
-            for (unsigned a = 1; a < b; ++a) {
-                gf_zero(&F->f_low);
-                bit_flip(&F->f_low, c);
-                bit_flip(&F->f_low, b);
-                bit_flip(&F->f_low, a);
-                bit_flip(&F->f_low, 0);
-
-                if (is_irreducible(F))
-                    return 0;
-            }
-
-    return -1;
-}
-
-/*
- * Sets up GF(2^n), 2 <= n <= GF_MAX_BITS. The search for the polynomial costs far more
- * than the arithmetic in the field (about 1 ms at n = 64, 30 ms at n = 256), so the
- * result of the last call is cached per thread.
+ * Sets up GF(2^n), 2 <= n <= GF_MAX_BITS. The field polynomial f = x^n + f_low is
+ * looked up in a table of low-weight irreducible polynomials (gf_irreducible.h),
+ * so every party that uses the same n works in the same field. Finding such a
+ * polynomial by search costs far more than the arithmetic in the field (about 1 ms
+ * at n = 64 and 30 ms at n = 256, with an irreducibility test such as Ben-Or's or
+ * Rabin's), which is why the table was generated once and checked offline.
  */
 int gf_field_init(gf_field_t *F, unsigned n)
 {
-    static _Thread_local gf_field_t cached;
-    static _Thread_local int have_cached;
-
     if (F == NULL || n < 2 || n > GF_MAX_BITS)
         return -1;
 
-    if (!have_cached || cached.n != n) {
-        if (gf_field_search(&cached, n) != 0) {
-            have_cached = 0;
-            return -1;
-        }
-        have_cached = 1;
-    }
+    const gf_irreducible_t *t = &gf_irreducible[n];
 
-    *F = cached;
+    F->n = n;
+    F->nw = n / 64 + 1;
+    gf_zero(&F->f_low);
+
+    bit_flip(&F->f_low, 0);
+    bit_flip(&F->f_low, t->a);
+    if (t->b != 0) {
+        bit_flip(&F->f_low, t->b);
+        bit_flip(&F->f_low, t->c);
+    }
 
     return 0;
 }

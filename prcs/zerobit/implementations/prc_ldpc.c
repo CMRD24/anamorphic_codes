@@ -152,9 +152,9 @@ ldpc_blocksize(const void *params_ptr){
 
 
 /*
- * Key generation: samples P, computes a basis of ker P (kernel_basis, Gauss-Jordan
- * elimination), draws every column of G as a uniform element of ker P (a random
- * XOR of the basis vectors) and the pad z. Fails if dim ker P < g.
+ * Key generation: samples P, computes a basis of ker P, draws every column of G as a
+ * uniform element of ker P (a random combination of the basis vectors, computed as
+ * one matrix product) and the pad z. Fails if dim ker P < g.
  */
 ZBPRC_Keys *
 ldpc_keygen(const void *params_ptr,
@@ -207,21 +207,12 @@ ldpc_keygen(const void *params_ptr,
 
     sample_sparse_p(random, &P);
 
-    /*
-     * Compute ker(P).
-     */
-    PackedMatrix A =
-        sparse_p_to_packed(&P);
-    KernelBasis K =
-        kernel_basis(&A);
+    /* basis of ker P (Gaussian elimination by M4RI) */
+    KernelBasis K = sparse_p_kernel(&P);
 
     if (params->g > K.dimension) {
-
-        fprintf(stderr,
-                "ZBPRC-LDPC: g=%zu exceeds "
-                "dim ker(P)=%zu.\n",
-                params->g,
-                K.dimension);
+        fprintf(stderr, "ZBPRC-LDPC: g=%zu exceeds dim ker(P)=%zu.\n",
+                params->g, K.dimension);
 
         kernel_basis_free(&K);
         sparse_p_free(&P);
@@ -232,33 +223,8 @@ ldpc_keygen(const void *params_ptr,
         return NULL;
     }
 
-    /*
-     * Sample G uniformly from ker(P).
-     */
-    PackedG G =
-        packed_g_alloc(params->n,
-                       params->g);
-
-    for (size_t j = 0;
-         j < params->g;
-         ++j) {
-
-        for (size_t k = 0;
-             k < K.dimension;
-             ++k) {
-
-            if (random_bit(random)) {
-
-                for (size_t w = 0;
-                     w < G.columns[j].words;
-                     ++w) {
-
-                    G.columns[j].data[w] ^=
-                        K.vectors[k].data[w];
-                }
-            }
-        }
-    }
+    /* g uniform elements of ker P as the columns of G */
+    PackedG G = kernel_random_span(&K, params->n, params->g, random);
 
     kernel_basis_free(&K);
 

@@ -53,6 +53,38 @@ static void test_gf_inverse_and_distributivity(void)
     }
 }
 
+/*
+ * Every field of the polynomial table is a field: in a reducible quotient ring the
+ * unit group does not have order 2^n - 1, so a^(2^n - 2) is not the inverse of a
+ * random element a (checked with gf_inv, which uses exactly that exponent).
+ */
+static void test_gf_table_fields(void)
+{
+    for (unsigned n = 2; n <= GF_MAX_BITS; n = (n < 256 ? n + 1 : (n == 1023 ? 1024 : n + 31))) {
+        gf_field_t F;
+        gf_elem_t a, inv, prod, one;
+
+        CHECK(gf_field_init(&F, n) == 0);
+
+        gf_zero(&a);
+        gf_zero(&one);
+        one.w[0] = 1;
+        for (unsigned i = 0; i < n; ++i) {
+            if (rand() & 1)
+                a.w[i / 64] |= (uint64_t)1 << (i % 64);
+        }
+        a.w[0] |= 2;     /* non-zero */
+
+        gf_inv(&F, &inv, &a);
+        gf_mul(&F, &prod, &a, &inv);
+        CHECK_MSG(gf_equal(&F, &prod, &one), "n=%u", n);
+    }
+
+    gf_field_t F;
+    CHECK(gf_field_init(&F, 1) != 0);
+    CHECK(gf_field_init(&F, GF_MAX_BITS + 1) != 0);
+}
+
 static void test_gf_interpolation(void)
 {
     gf_field_t F;
@@ -163,7 +195,8 @@ static void test_anamorphic_roundtrip(void)
     /* GF(16) with lambda = 128, K = 2a = 64 */
     CHECK(arlnc_roundtrip(16, 64, 128, 66, 100));
     /* GF(2): a = 128, K = 256 */
-    CHECK(arlnc_roundtrip(2, 256, 128, 266, 300));
+    /* S = K + 20: a random binary matrix with 20 extra rows is singular w.p. ~2^-20 */
+    CHECK(arlnc_roundtrip(2, 256, 128, 276, 300));
     /* S close to K (a square system over GF(256) is singular with probability ~1/255) */
     CHECK(arlnc_roundtrip(256, 8, 32, 10, 16));
 }
@@ -266,6 +299,7 @@ int main(void)
     rng = linux_randomness();
 
     RUN(test_gf_inverse_and_distributivity);
+    RUN(test_gf_table_fields);
     RUN(test_gf_interpolation);
     RUN(test_regular_roundtrip);
     RUN(test_anamorphic_roundtrip);

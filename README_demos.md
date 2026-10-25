@@ -19,7 +19,7 @@ codewords differ.
 
 ## Build
 
-Requires CMake, a C11 compiler and libsodium. The wiretap demo also needs
+Requires CMake, a C11 compiler, libsodium and M4RI (`libm4ri-dev` on Debian/Ubuntu, dense linear algebra over GF(2)). The wiretap demo also needs
 OpenSSL (it is skipped if OpenSSL is not found).
 
 ```sh

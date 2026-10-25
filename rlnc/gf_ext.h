@@ -11,8 +11,8 @@
  * read as a vector of N/m symbols of GF(2^m): symbol i occupies bits
  * [i*m, (i+1)*m). This is the identification E = F_q^{K-a} used by aRLNC.
  *
- * The defining polynomial is the first irreducible trinomial/pentanomial of
- * degree N in a fixed search order, so encoder and decoder agree on it.
+ * The defining polynomial of degree N is taken from a fixed table of low-weight
+ * irreducible polynomials (gf_irreducible.h), so encoder and decoder agree on it.
  */
 
 #define GF_MAX_BITS 1024
