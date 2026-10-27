@@ -1,7 +1,5 @@
 /*
  * PRC^1_adapt: a one-bit PRC from two independent instances of a zero-bit PRC
- * (the adaptive one-bit construction of Christ and Gunn, "Pseudorandom
- * Error-Correcting Codes", CRYPTO 2024).
  *
  * Encode(m): encode 1 with instance m. Decode: run the zero-bit decoder of both
  * instances; exactly one must accept and its index is the bit. Each instance
@@ -118,6 +116,7 @@ static uint8_t *adapt_encode(const void *params_ptr,
     return zbprc_encode(params->underlying_prc, enc_key->instance[message[0] & 1u], random,
                         codeword_bits);
 }
+
 
 static int adapt_decode(const void *params_ptr,
                         const MBPRC_DecKey *dec_key,

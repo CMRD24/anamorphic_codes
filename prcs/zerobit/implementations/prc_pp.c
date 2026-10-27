@@ -1,7 +1,7 @@
 /*
  * Zero-bit PRC from a "permuted puzzle" over a q-ary alphabet (the
- * error-correcting-code based construction of Christ and Gunn, "Pseudorandom
- * Error-Correcting Codes", CRYPTO 2024).
+ * substitution-robust construction of Christ et. al., 
+ * "Improved Pseudorandom Codes from Permuted Puzzles").
  *
  * Let C be an error-correcting code with a worst-case decoder, encoding x in F_q^k
  * to a word of F_q^n.
@@ -60,7 +60,7 @@ static size_t get_symbol(const uint8_t *buf, size_t index, size_t symbol_bits)
     for (size_t j = 0; j < symbol_bits; j++) {
         const size_t bit = first_bit + j;
 
-        value |= (size_t)((buf[bit >> 3] >> (bit & 7)) & 1u) << j;
+        value |= (size_t)((buf[bit >> 3] >> (bit & 7)) & 1u) << j; //get the bit at position j and write it in value at position j
     }
 
     return value;
@@ -72,12 +72,12 @@ static void set_symbol(uint8_t *buf, size_t index, size_t symbol_bits, size_t va
 
     for (size_t j = 0; j < symbol_bits; j++) {
         const size_t bit = first_bit + j;
-        const uint8_t mask = (uint8_t)(1u << (bit & 7));
+        const uint8_t mask = (uint8_t)(1u << (bit & 7)); //e.g. 0100 0000 (for bit%8 = 6)
 
-        if ((value >> j) & 1u)
-            buf[bit >> 3] |= mask;
+        if ((value >> j) & 1u) //e.g. value=7 j=2, 111 -> 1 => gets j-th bit of value
+            buf[bit >> 3] |= mask; // bit/8 or mask (sets corresponding bit to 1 and leaves others unchanged)
         else
-            buf[bit >> 3] &= (uint8_t)~mask;
+            buf[bit >> 3] &= (uint8_t)~mask; //bitwise negation -> deletes bit within the byte at bit/8 
     }
 }
 
@@ -219,14 +219,14 @@ static size_t substitute_symbol(size_t symbol, size_t q, double probability,
     if (probability <= 0.0)
         return symbol;
 
-    const double uniform = (double)(random_u64(random) >> 11) / 9007199254740992.0;
+    const double uniform = (double)(random_u64(random) >> 11) / 9007199254740992.0; //53 bits of the double's precision are used (that is why >> 11 is necessary. 9007199254740992 is 2^53)
 
     if (uniform >= probability)
         return symbol;
 
     const size_t other = random_bounded(random, q - 1);
 
-    return other >= symbol ? other + 1 : other;
+    return other >= symbol ? other + 1 : other; //makes sure the other symbol is different
 }
 
 /* Encode(enc_key; rho = x, omega): x is the seed of seed_bytes bytes */
@@ -337,8 +337,8 @@ static int pp_recover_decode(const void *params_ptr,
             goto done;
 
         /* c[sigma[i]] = pi_i^-1(hat_c[i] - o_i) */
-        symbol = (symbol + params->q - dec_key->pad[i]) % params->q;
-        set_symbol(received, dec_key->sigma[i], params->symbol_bits,
+        symbol = (symbol + params->q - dec_key->pad[i]) % params->q; //removes otp
+        set_symbol(received, dec_key->sigma[i], params->symbol_bits, //reverses permutations
                    dec_key->pi_inverse[i][symbol]);
     }
 
@@ -352,7 +352,7 @@ static int pp_recover_decode(const void *params_ptr,
 
     for (size_t i = 0; i < params->n; i++)
         distance += get_symbol(received, i, params->symbol_bits) !=
-                    get_symbol(reencoded, i, params->symbol_bits);
+                    get_symbol(reencoded, i, params->symbol_bits); //hamming distance
 
     accepted = (double)distance <= params->delta * (double)params->n;
 

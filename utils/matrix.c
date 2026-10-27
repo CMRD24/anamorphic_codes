@@ -11,10 +11,7 @@
  * Addition in F_2 is XOR and multiplication is AND, so sums of vectors are XORs
  * of whole words. The sparse products are computed here directly; the dense
  * eliminations use the M4RI library (M. Albrecht, G. Bard, "The M4RI Library",
- * https://github.com/malb/m4ri), which implements Gaussian elimination and PLUQ
- * decomposition with the "Method of the Four Russians" (M. Albrecht, G. Bard,
- * C. Pernet, "Efficient dense Gaussian elimination over the finite field with two
- * elements", arXiv:1111.6549, 2011). M4RI stores rows as arrays of 64-bit words
+ * https://github.com/malb/m4ri). M4RI stores rows as arrays of 64-bit words
  * with the same bit order, so rows and BitVectors are copied word by word.
  */
 
@@ -80,9 +77,10 @@ void bitvector_free(BitVector *v)
     *v = (BitVector){0};
 }
 
+//value is 0 or 1
 void bitvector_set_bit(BitVector *v, size_t index, uint8_t value)
 {
-    const uint64_t mask = UINT64_C(1) << (index % WORD_BITS);
+    const uint64_t mask = UINT64_C(1) << (index % WORD_BITS); //mask with 1 at position index % WORD_BITS
 
     if (value)
         v->data[index / WORD_BITS] |= mask;
@@ -115,10 +113,10 @@ void bitvector_add(BitVector *dst, const BitVector *src)
 /* bytes holds (v->bits + 7) / 8 bytes; bits above v->bits in the last byte are ignored */
 void bitvector_from_bytes(BitVector *v, const uint8_t *bytes)
 {
-    memset(v->data, 0, v->words * sizeof(uint64_t));
+    memset(v->data, 0, v->words * sizeof(uint64_t)); //zero the data first
 
-    for (size_t i = 0; i < (v->bits + 7) / 8; ++i)
-        v->data[i / 8] |= (uint64_t)bytes[i] << (8 * (i % 8));
+    for (size_t i = 0; i < (v->bits + 7) / 8; ++i) // each i is a byte
+        v->data[i / 8] |= (uint64_t)bytes[i] << (8 * (i % 8)); //populate the word with bytes (right to left)
 
     clear_padding(v);
 }
@@ -133,7 +131,7 @@ uint8_t *bitvector_to_bytes(const BitVector *v)
         return NULL;
 
     for (size_t i = 0; i < byte_count; ++i)
-        bytes[i] = (uint8_t)(v->data[i / 8] >> (8 * (i % 8)));
+        bytes[i] = (uint8_t)(v->data[i / 8] >> (8 * (i % 8))); // each word is 8 bytes (get from right to left by increasingly shifting to the right)
 
     return bytes;
 }
@@ -164,7 +162,7 @@ void sparse_matrix_free(SparseMatrix *M)
 
 /*
  * Every row independently: row_weight distinct column positions, drawn uniformly
- * by rejecting repeats, i.e. a uniform vector of weight row_weight.
+ * by rejecting repeats (must be done to insure the vector to actually have the right row-weight), i.e. a uniform vector of weight row_weight.
  */
 void sparse_matrix_sample(SparseMatrix *M, RandomnessSource *random)
 {
@@ -191,7 +189,7 @@ void sparse_matrix_sample(SparseMatrix *M, RandomnessSource *random)
  */
 void sparse_matrix_mul_vector(const SparseMatrix *M, const BitVector *x, BitVector *y)
 {
-    memset(y->data, 0, y->words * sizeof(uint64_t));
+    memset(y->data, 0, y->words * sizeof(uint64_t)); //zero y
 
     for (size_t row = 0; row < M->rows; ++row) {
         const size_t *positions = M->positions + row * M->row_weight;
@@ -234,10 +232,10 @@ void column_matrix_free(ColumnMatrix *M)
     *M = (ColumnMatrix){0};
 }
 
-/* y = M x: the XOR of the columns j with x_j = 1 (cost O(rows * cols / 64)). */
+/* y = M x: the XOR of the columns j with x_j = 1. */
 void column_matrix_mul_vector(const ColumnMatrix *M, const BitVector *x, BitVector *y)
 {
-    memset(y->data, 0, y->words * sizeof(uint64_t));
+    memset(y->data, 0, y->words * sizeof(uint64_t));// zero y
 
     for (size_t j = 0; j < M->cols; ++j) {
         if (bitvector_get_bit(x, j))
@@ -262,23 +260,24 @@ ColumnMatrix sparse_matrix_mul_column_matrix(const SparseMatrix *P, const Column
  * basis. M4RI works on rows, so M is built from its transpose (whose rows are the
  * columns of M) and X is read through its transpose.
  */
+//m4ri documentation: https://malb.bitbucket.io/m4ri/mzd_8h.html
 ColumnMatrix column_matrix_kernel(const ColumnMatrix *M)
 {
-    mzd_t *Mt = mzd_init((rci_t)M->cols, (rci_t)M->rows);
+    mzd_t *Mt = mzd_init((rci_t)M->cols, (rci_t)M->rows); //transposed init
 
     for (size_t j = 0; j < M->cols; ++j)
-        memcpy(mzd_row(Mt, (rci_t)j), M->columns[j].data, M->columns[j].words * sizeof(uint64_t));
+        memcpy(mzd_row(Mt, (rci_t)j), M->columns[j].data, M->columns[j].words * sizeof(uint64_t)); //populate rows of transposed matrix with columns
 
-    mzd_t *A = mzd_transpose(NULL, Mt);
-    mzd_t *X = mzd_kernel_left_pluq(A, 0);       /* NULL: trivial kernel */
-    ColumnMatrix basis = column_matrix_alloc(M->cols, X != NULL ? (size_t)X->ncols : 0);
+    mzd_t *A = mzd_transpose(NULL, Mt); //A = (M^T)^T = M
+    mzd_t *X = mzd_kernel_left_pluq(A, 0);       /* NULL: trivial kernel */ //Solve X for A X = 0. https://malb.bitbucket.io/m4ri/solve_8h.html#a57eade59ba43ad425d09c2336205d82b => X is the kernel of M
+    ColumnMatrix basis = column_matrix_alloc(M->cols, X != NULL ? (size_t)X->ncols : 0); //initialize X as ColumnMatrix
 
     if (X != NULL) {
         mzd_t *Xt = mzd_transpose(NULL, X);
 
         for (size_t j = 0; j < basis.cols; ++j) {
             memcpy(basis.columns[j].data, mzd_row(Xt, (rci_t)j),
-                   basis.columns[j].words * sizeof(uint64_t));
+                   basis.columns[j].words * sizeof(uint64_t)); //copy rows from Xt into columns of basis
             clear_padding(&basis.columns[j]);
         }
 
@@ -301,7 +300,6 @@ ColumnMatrix column_matrix_kernel(const ColumnMatrix *M)
  * for every row i. Each column is therefore sampled by drawing the free
  * coordinates uniformly and solving for the pivot coordinates; this is a bijection
  * between F_2^(n - rank) and ker P, so the columns are uniform and independent.
- * Cost O(count * rank * n / 64).
  */
 ColumnMatrix sparse_matrix_sample_kernel(const SparseMatrix *P, size_t count,
                                          RandomnessSource *random)
@@ -309,14 +307,16 @@ ColumnMatrix sparse_matrix_sample_kernel(const SparseMatrix *P, size_t count,
     ColumnMatrix samples = column_matrix_alloc(P->cols, count);
     mzd_t *R = mzd_init((rci_t)P->rows, (rci_t)P->cols);
 
+    // transform SparseMatrix to mzd_t by writing each bit
     for (size_t row = 0; row < P->rows; ++row) {
         for (size_t j = 0; j < P->row_weight; ++j)
             mzd_write_bit(R, (rci_t)row, (rci_t)P->positions[row * P->row_weight + j], 1);
     }
 
-    const size_t rank = (size_t)mzd_echelonize_m4ri(R, 1, 0);
+    const size_t rank = (size_t)mzd_echelonize_m4ri(R, 1, 0); //https://malb.bitbucket.io/m4ri/echelonform_8h.html#a1b261150883fb32d5e82f2b42eae96ab: sets the reduced row echelon form of R in place, returns the rank of R
     size_t *pivots = checked_calloc(rank, sizeof(size_t));
 
+    //find all pivots (these can't be chosen freely)
     for (size_t i = 0; i < rank; ++i) {
         const word *row = mzd_row(R, (rci_t)i);
         size_t w = 0;
@@ -324,26 +324,27 @@ ColumnMatrix sparse_matrix_sample_kernel(const SparseMatrix *P, size_t count,
         while (row[w] == 0)
             ++w;
 
-        pivots[i] = w * WORD_BITS + (size_t)__builtin_ctzll(row[w]);
+        pivots[i] = w * WORD_BITS + (size_t)__builtin_ctzll(row[w]); //__builtin_ctzll Returns the number of trailing 0-bits in x, starting at the least significant bit position (https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html)
     }
 
     for (size_t j = 0; j < count; ++j) {
-        BitVector *x = &samples.columns[j];
+        BitVector *x = &samples.columns[j]; //j-th column of the result
 
-        random_bitvector(random, x);
+        random_bitvector(random, x); //initially, choose completely at random
 
         for (size_t i = 0; i < rank; ++i)
-            bitvector_set_bit(x, pivots[i], 0);
+            bitvector_set_bit(x, pivots[i], 0); //then, set the bits at the pivot postions to 0:
 
-        /* the pivot coordinates do not enter any row's sum, so the order does not matter */
+        /* the pivot coordinates do not enter any row's sum (because they are set to 0), so the order does not matter */
         for (size_t i = 0; i < rank; ++i) {
             const word *row = mzd_row(R, (rci_t)i);
             uint64_t parity = 0;
 
+            //calculate the echelon row * the random column vector (with zeroed pivots) to determine what the pivot position in the column vector should be (this insures that row*column=0 for all i rows)
             for (size_t w = 0; w < x->words; ++w)
                 parity ^= row[w] & x->data[w];
 
-            bitvector_set_bit(x, pivots[i], (uint8_t)(__builtin_popcountll(parity) & 1));
+            bitvector_set_bit(x, pivots[i], (uint8_t)(__builtin_popcountll(parity) & 1)); //__builtin_popcountll Returns the number of 1-bits in parity. If uneven, set to 1, otherwise to 0 (so row*column=0 in characteristic 2)
         }
     }
 

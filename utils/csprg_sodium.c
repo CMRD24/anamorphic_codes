@@ -3,8 +3,7 @@
  *
  * The seed (any length) is compressed to a 256-bit key with BLAKE2b and a domain
  * separation prefix; the output is the ChaCha20 keystream under that key
- * (D. J. Bernstein, "ChaCha, a variant of Salsa20", 2008; libsodium
- * crypto_stream_chacha20 with a 64-bit block counter). ChaCha20 is a stream
+ * (libsodium crypto_stream_chacha20 with a 64-bit block counter). ChaCha20 is a stream
  * cipher, so the stream is indistinguishable from random to anyone who does not
  * know the seed. It is used to derive reproducible keys and the pseudorandom
  * coins of the PRC constructions; the output is a continuous byte stream, i.e.
@@ -32,6 +31,7 @@ typedef struct {
 static const uint8_t nonce[crypto_stream_chacha20_NONCEBYTES];   /* zero: one key per stream */
 
 /* the keystream bytes [position, position + len) */
+//similar implementation to random_linux
 static int stream_read(void *vctx, uint8_t *out, size_t len)
 {
     StreamCtx *ctx = vctx;
@@ -51,6 +51,7 @@ static int stream_read(void *vctx, uint8_t *out, size_t len)
                 take = CHUNK_BYTES;
 
             memset(out, 0, take);
+            //https://libsodium.gitbook.io/doc/advanced/stream_ciphers/chacha20
             crypto_stream_chacha20_xor_ic(out, out, take, nonce, index, ctx->key);
         } else {
             /* a partial block: kept, so consecutive small reads generate it once */
@@ -58,7 +59,7 @@ static int stream_read(void *vctx, uint8_t *out, size_t len)
             if (take > len)
                 take = len;
 
-            if (!ctx->block_valid || ctx->block_index != index) {
+            if (!ctx->block_valid || ctx->block_index != index) { //must generate new block
                 memset(ctx->block, 0, sizeof(ctx->block));
                 crypto_stream_chacha20_xor_ic(ctx->block, ctx->block, sizeof(ctx->block),
                                               nonce, index, ctx->key);
@@ -102,7 +103,7 @@ RandomnessSource csprg_randomness(const uint8_t *seed, size_t seed_length)
 
     /* key = BLAKE2b-256(domain || seed) */
     crypto_generichash_init(&state, NULL, 0, sizeof(ctx->key));
-    crypto_generichash_update(&state, domain, sizeof(domain) - 1);
+    crypto_generichash_update(&state, domain, sizeof(domain) - 1);//don't use the zero-terminator of the string as domain part (that is why -1)
     crypto_generichash_update(&state, seed, seed_length);
     crypto_generichash_final(&state, ctx->key, sizeof(ctx->key));
 

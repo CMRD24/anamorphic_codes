@@ -10,9 +10,8 @@
  * Decode(c): decode the inner PRC to r || m || R2', recompute R2 || R1 from
  * (r, m), and accept iff R2' = R2 and the re-encoding of the payload with the
  * coins R1 is within relative Hamming distance delta of the received word. The
- * re-encoding check rejects words that decode but were not produced by Encode
- * (the idea of re-encrypting and comparing, cf. the Fujisaki-Okamoto
- * transformation, CRYPTO 1999); delta must exceed the noise rate of the channel.
+ * re-encoding check rejects words that decode but were not produced by Encode;
+ *  delta must exceed the noise rate of the channel.
  *
  * The two PRCs differ in the derivation of R2 || R1 (a stream of the ChaCha20
  * generator of csprg_sodium.c):
@@ -137,7 +136,7 @@ static MBPRC_Keys *keygen(const PRCReencode_Params *params, CoinDerivation deriv
     }
 
     shared->key = inner_keys->enc;
-    shared->references = 2;
+    shared->references = 2; //encoder and decoder
 
     keys->enc->derivation = derivation;
     keys->enc->inner_enc_key = shared;
@@ -172,18 +171,20 @@ static RandomnessSource derive_coins(CoinDerivation derivation, const uint8_t ke
     if (derivation == COINS_FROM_HASH) {
         uint8_t digest[crypto_generichash_BYTES_MAX];
 
-        crypto_generichash(digest, sizeof(digest), r_and_m, bytes, key, KEY_BYTES);
+        crypto_generichash(digest, sizeof(digest), r_and_m, bytes, key, KEY_BYTES);//keyed hash function (blake2b) - digest is result
 
         RandomnessSource coins = csprg_randomness(digest, sizeof(digest));
 
-        sodium_memzero(digest, sizeof(digest));
+        sodium_memzero(digest, sizeof(digest));//coins does not own digest
         return coins;
     }
+
+    //else if from PRF with seed r||m -> concatenate with prf key:
 
     uint8_t *seed = malloc(KEY_BYTES + bytes);
 
     if (seed == NULL)
-        return (RandomnessSource){.ctx = NULL, .rng = NULL};
+        return (RandomnessSource){.ctx = NULL, .rng = NULL}; //leads to randomness failure -> handled higher up
 
     memcpy(seed, key, KEY_BYTES);
     memcpy(seed + KEY_BYTES, r_and_m, bytes);
@@ -209,7 +210,7 @@ static uint8_t *payload_of(const PRCReencode_Params *params, const uint8_t *r_an
     uint8_t *R2 = malloc(params->lambda / 8);
 
     if (payload != NULL && R2 != NULL && coins->rng != NULL &&
-        coins->rng(coins->ctx, R2, params->lambda / 8)) {
+        coins->rng(coins->ctx, R2, params->lambda / 8)) { //generate R2 (second output of PRF) first
         copy_bits(payload, 0, r_and_m, 0, r_and_m_bits);
         copy_bits(payload, r_and_m_bits, R2, 0, params->lambda);
     } else {
@@ -323,7 +324,7 @@ static int reencode_recover_decode(const void *params_ptr,
         goto done;
 
     if (decoded_bits % 8 != 0)
-        decoded[decoded_bits / 8] &= (uint8_t)((1u << (decoded_bits % 8)) - 1);
+        decoded[decoded_bits / 8] &= (uint8_t)((1u << (decoded_bits % 8)) - 1); //remove bits (set to 0) that are not part of the decoded message
 
     const size_t message_bits = decoded_bits - 2 * params->lambda;
     const size_t r_and_m_bits = params->lambda + message_bits;
@@ -346,7 +347,7 @@ static int reencode_recover_decode(const void *params_ptr,
         goto done;
 
     copy_bits(seed_out, 0, decoded, 0, params->lambda);
-    memset(message_out, 0, bits_to_bytes(message_bits));
+    memset(message_out, 0, bits_to_bytes(message_bits)); //makes sure the last (potentially unused) bits are zero (not crucial tho)
     copy_bits(message_out, 0, decoded, params->lambda, message_bits);
     *message_bits_out = message_bits;
     accepted = 1;

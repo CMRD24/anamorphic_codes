@@ -28,7 +28,7 @@ struct ZBPRC_DecKey {
  * (uniform for a regular codeword, B s for an anamorphic one). Returns NULL on
  * allocation failure.
  */
-uint8_t *ldpc_encode_secret(const LDPCParams *params,
+uint8_t *ldpc_encode_seed(const LDPCParams *params,
                             const ZBPRC_EncKey *enc_key,
                             const BitVector *x,
                             RandomnessSource *random,

@@ -62,9 +62,10 @@ static void xor_bytes(
         out[i] = a[i] ^ b[i];
 }
 
+//implemented as described in https://link.springer.com/article/10.1186/s42400-025-00419-9
 /*
  * Round function of OAEP4: the first half_len bytes of
- * SHAKE-256(domain[round] || input) (extendable-output function of FIPS 202).
+ * SHAKE-256(domain[round] || input)
  * The distinct domain strings make the four round functions independent.
  */
 static int shake_round(
@@ -87,20 +88,30 @@ static int shake_round(
         half_len == 0)
         return -1;
 
+    //Allocates and returns a digest context. (https://manpages.debian.org/testing/libssl-doc/EVP_MD_CTX_new.3ssl.en.html)
     ctx = EVP_MD_CTX_new();
     if (!ctx)
         return -1;
 
+    /*
+    Sets up digest context ctx to use a digest type. type is typically supplied by a function such as EVP_sha1(), or a value explicitly fetched with EVP_MD_fetch()
+    */
     if (EVP_DigestInit_ex(ctx, EVP_shake256(), NULL) != 1)
         goto cleanup;
 
+        /*
+        Hashes cnt bytes of data at d into the digest context ctx. This function can be called several times on the same ctx to hash additional data.
+        */
     if (EVP_DigestUpdate(
-            ctx, domains[round], strlen(domains[round])) != 1)
+            ctx, domains[round], strlen(domains[round])) != 1) //domain as input to the hash
         goto cleanup;
 
-    if (EVP_DigestUpdate(ctx, input, half_len) != 1)
+    if (EVP_DigestUpdate(ctx, input, half_len) != 1) //input as input to the hash
         goto cleanup;
 
+    /*
+    Interfaces to extendable-output functions, XOFs, such as SHAKE128 and SHAKE256. It retrieves the digest value from ctx and places it in outlen-sized out.
+    */
     if (EVP_DigestFinalXOF(ctx, output, half_len) != 1)
         goto cleanup;
 
@@ -112,12 +123,7 @@ cleanup:
 }
 
 /*
- * OAEP4: an invertible all-or-nothing style transform on K bytes, a four-round
- * Feistel network (Luby and Rackoff, "How to construct pseudorandom permutations
- * from pseudorandom functions", SIAM J. Comput. 17(2), 1988: four rounds with
- * independent round functions give a strong pseudorandom permutation) with
- * OAEP-like rounds (Bellare and Rogaway, "Optimal asymmetric encryption padding",
- * EUROCRYPT 1994). With L || R = input:
+ * OAEP4: an invertible transform on K bytes as defined in https://link.springer.com/article/10.1186/s42400-025-00419-9. With L || R = input:
  *
  *   L1 = L  XOR H1(R)
  *   R1 = R  XOR G1(L1)
@@ -126,7 +132,7 @@ cleanup:
  *
  * output = L2 || R2. Every round is its own inverse given the other half, so the
  * transform is inverted by undoing the rounds in reverse order. The round
- * functions are SHAKE-256 (FIPS 202) with a distinct domain-separation prefix
+ * functions are SHAKE-256 with a distinct domain-separation prefix
  * per round.
  */
 int wiretap_oaep4(
@@ -334,7 +340,7 @@ size_t wiretap_encoded_size(
     codeword_bytes = wiretap_block_codeword_size(config);
 
     if (mul_overflow_size(block_count, codeword_bytes, &blocks) ||
-        add_overflow_size(codeword_bytes, blocks, &total))
+        add_overflow_size(codeword_bytes, blocks, &total)) //1+blocks * codeword_bytes (the one extra is for the seed)
         return 0;
 
     return total;
@@ -458,6 +464,9 @@ int wiretap_encode_with_seed(
         /* v_i = IFE(s_i) = OAEP4(s_i) */
         if (wiretap_oaep4(s, config->block_bytes, v) != 0)
             goto cleanup;
+
+
+        //optional TODO: instead of xor-ing using the CRE as proposed in the paper as design choice (it is not part of the security analysis) 
 
         /* r_i = r_(i-1) XOR v_i */
         xor_bytes(r_next, r_prev, v, config->block_bytes);

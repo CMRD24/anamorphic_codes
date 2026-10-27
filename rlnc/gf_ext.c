@@ -11,8 +11,7 @@
  * irreducible polynomial of degree N over GF(2). An element is a polynomial of
  * degree < N, stored as a bit vector (bit i = coefficient of x^i). Addition is
  * the XOR of the vectors, multiplication is polynomial multiplication reduced
- * modulo f. See D. Hankerson, A. Menezes, S. Vanstone, "Guide to Elliptic Curve
- * Cryptography", section 2.3 (binary field arithmetic).
+ * modulo f.
  *
  * Invariant: all words of an element above the field's words are zero.
  */
@@ -40,7 +39,7 @@ static void bit_clear(gf_elem_t *a, unsigned i)
 static void poly_shl1(gf_elem_t *a, unsigned words)
 {
     for (unsigned i = words - 1; i > 0; --i)
-        a->w[i] = (a->w[i] << 1) | (a->w[i - 1] >> 63);
+        a->w[i] = (a->w[i] << 1) | (a->w[i - 1] >> 63); //lowest bit of the shifted word is highest bit of the next lower word
     a->w[0] <<= 1;
 }
 
@@ -102,8 +101,7 @@ int gf_equal(const gf_field_t *field, const gf_elem_t *a, const gf_elem_t *b)
  *    product <- product * x mod f;  if b_i = 1 then product <- product + a.
  * Multiplying by x shifts the bit vector by one position; if the shifted-out
  * coefficient of x^(N-1) was 1, x^N is replaced by f_low (the field polynomial
- * without its leading term), because x^N = f_low in characteristic 2. Cost O(N)
- * operations on N/64 + 1 words; r may alias a or b.
+ * without its leading term), because x^N = f_low in characteristic 2; r may alias a or b.
  */
 void gf_mul(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a, const gf_elem_t *b)
 {
@@ -120,21 +118,23 @@ void gf_mul(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a, const gf_
     }
 
     gf_zero(&product);
-    top_bit = top_bit * 64 + 63;
+    top_bit = top_bit * 64 + 63; //before it was "top_word" -> convert to bit
     while (!bit_get(b, (unsigned)top_bit))
         --top_bit;
 
+    //now b:=top_bit is highest non-zero bit
+    //ab = a(b_d x^d + … + b_1x + b_0) = ( ... ((b_da)x + b_{d−1}a)x + ... )x + b_0
     for (int i = top_bit; i >= 0; --i) {
         const int carry = bit_get(&product, field->n - 1);
 
-        poly_shl1(&product, field->words);
-        bit_clear(&product, field->n);
+        poly_shl1(&product, field->words); //product <- product * x mod f
+        bit_clear(&product, field->n); //only relevant if carry=1
 
         if (carry)
-            xor_into(&product, &field->f_low, field->words);
+            xor_into(&product, &field->f_low, field->words); //because in characteristic 2 and f=0: x^n = -f_low = f_low. So adding it back compensates the removed x^n (but keeps the highest bit 0)
 
         if (bit_get(b, (unsigned)i))
-            xor_into(&product, a, field->words);
+            xor_into(&product, a, field->words); //if b_i=1, add a to the product so the loops result is product <- product*x +b_i*a
     }
 
     *r = product;
@@ -153,11 +153,11 @@ void gf_inv(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a)
 
     /* after the i-th round power = a^(2^(i+1) - 1); the loop ends at 2^(n-1) - 1 */
     for (unsigned i = 1; i + 1 < field->n; ++i) {
-        gf_mul(field, &power, &power, &power);
-        gf_mul(field, &power, &power, a);
+        gf_mul(field, &power, &power, &power);//square
+        gf_mul(field, &power, &power, a);//multiply, leading to (a^(2^i - 1))^2 * a
     }
-
-    gf_mul(field, r, &power, &power);
+    //now power = a^(2^(n-1) - 1)
+    gf_mul(field, r, &power, &power); //a^(2^(n-1) - 1)^2 = a^(2^N - 2) = a^-1
 }
 
 /*
@@ -165,8 +165,8 @@ void gf_inv(const gf_field_t *field, gf_elem_t *r, const gf_elem_t *a)
  * looked up in a table of low-weight irreducible polynomials (gf_irreducible.h),
  * so every party that uses the same n works in the same field. Finding such a
  * polynomial by search costs far more than the arithmetic in the field (about 1 ms
- * at n = 64 and 30 ms at n = 256, with an irreducibility test such as Ben-Or's or
- * Rabin's), which is why the table was generated once and checked offline.
+ * at n = 64 and 30 ms at n = 256, with an irreducibility test such as Ben-Or's), 
+ * which is why the table was generated once and checked offline.
  */
 int gf_field_init(gf_field_t *field, unsigned n)
 {
@@ -179,6 +179,7 @@ int gf_field_init(gf_field_t *field, unsigned n)
     field->words = n / 64 + 1;
     gf_zero(&field->f_low);
 
+    //setup f_low s.t. f = x^n + f_low
     bit_flip(&field->f_low, 0);
     bit_flip(&field->f_low, t->a);
     if (t->b != 0) {
@@ -209,7 +210,7 @@ void gf_set_symbol(gf_elem_t *a, size_t i, unsigned m, uint32_t v)
     for (unsigned j = 0; j < m; ++j) {
         const unsigned pos = (unsigned)(i * m + j);
         bit_clear(a, pos);
-        if ((v >> j) & 1u)
+        if ((v >> j) & 1u) //if value bit at the j-th position is 1 set to 1 in a
             bit_flip(a, pos);
     }
 }
@@ -242,13 +243,14 @@ void gf_poly_eval(const gf_field_t *field, gf_elem_t *r,
  * pairwise distinct xs (-1 if two coincide).
  *
  * Lagrange interpolation (e.g. von zur Gathen, Gerhard, "Modern Computer Algebra",
- * chapter 5):
+ * chapter 5 p. 93 (http://lib.ysu.am/disciplines_bk/8daf5ccde25503ca099cd564bc4018f2.pdf), 
+ * https://en.wikipedia.org/wiki/Lagrange_polynomial):
  *    P(X) = sum_i  y_i * L_i(X),   L_i(X) = prod_{j != i} (X - x_j) / (x_i - x_j).
  * With the master polynomial M(X) = prod_j (X - x_j) the numerator is the quotient
  * Q_i = M / (X - x_i) (synthetic division, i.e. Horner / Ruffini, O(k)), and the
  * denominator is d_i = prod_{j != i} (x_i - x_j) = M'(x_i). All k inverses of the d_i
- * are obtained with one inversion by Montgomery's trick (P. L. Montgomery, "Speeding
- * the Pollard and elliptic curve methods of factorization", Math. Comp. 44, 1985):
+ * are obtained with one inversion by Montgomery's trick 
+ * (https://www.johndcook.com/blog/2026/01/14/montgomerys-trick/):
  * invert the prefix product d_0 ... d_{k-1} once and recover 1/d_i from it going
  * backwards. Total cost O(k^2) multiplications and one inversion; in characteristic 2
  * subtraction is addition.
@@ -269,14 +271,15 @@ int gf_poly_interpolate(const gf_field_t *field, gf_elem_t *coeffs,
         goto done;
 
     /* M = prod (X - x_i) (characteristic 2: X + x_i) */
+    //compute coefficients of the master polynomial M
     M[0].w[0] = 1;
-    for (size_t i = 0; i < k; ++i) {
-        for (size_t j = i + 1; j > 0; --j) {
+    for (size_t i = 0; i < k; ++i) {//build up degree of M (multiply in one linear factor at a time)
+        for (size_t j = i + 1; j > 0; --j) {//iterate over all coefficients of M so far
             gf_elem_t term;
-            gf_mul(field, &term, &M[j], &xs[i]);
-            gf_add(field, &M[j], &M[j - 1], &term);
+            gf_mul(field, &term, &M[j], &xs[i]); //at j=i+1 M[j]=0 and becomes 1 with the addition (increases degree by 1). For lower monomials, 
+            gf_add(field, &M[j], &M[j - 1], &term); //add the old value (now shifted by one position to the left because of the multiplication with X)
         }
-        gf_mul(field, &M[0], &M[0], &xs[i]);
+        gf_mul(field, &M[0], &M[0], &xs[i]); //j=0 case (nothing to add because the old M shifted to the left is 0 here (lowest position))
     }
 
     /*
@@ -285,6 +288,7 @@ int gf_poly_interpolate(const gf_field_t *field, gf_elem_t *coeffs,
      * instead of k inversions.
      */
     for (size_t i = 0; i < k; ++i) {
+        //building d the same way as M except that the i-th factor is left out
         gf_elem_t d;
 
         d.w[0] = 1;
@@ -304,30 +308,34 @@ int gf_poly_interpolate(const gf_field_t *field, gf_elem_t *coeffs,
         if (gf_is_zero(&d))
             goto done; /* repeated x */
 
+        
         inv_d[i] = d;
+        //build the prefix products for the later inversion: 
         if (i == 0)
             prefix[0] = d;
         else
             gf_mul(field, &prefix[i], &prefix[i - 1], &d);
     }
 
+    //(seperate scope for total): applying montgomery's trick
     {
         gf_elem_t total;
 
-        gf_inv(field, &total, &prefix[k - 1]);
+        gf_inv(field, &total, &prefix[k - 1]); //i.e. total = (d_(k-1)...d_0)^-1
 
         for (size_t i = k; i-- > 0;) {
             gf_elem_t d = inv_d[i];
 
             if (i == 0)
-                inv_d[0] = total;
+                inv_d[0] = total; //only the inverse of a single factor left which is d_0^-1
             else
-                gf_mul(field, &inv_d[i], &total, &prefix[i - 1]);
+                gf_mul(field, &inv_d[i], &total, &prefix[i - 1]); //e.g. (abc)^-1 * ab = c
 
-            gf_mul(field, &total, &total, &d);
+            gf_mul(field, &total, &total, &d); //remove d_i from the total inverse
         }
     }
 
+    //make sure the coefficients are zeroed
     for (size_t j = 0; j < k; ++j)
         gf_zero(&coeffs[j]);
 
@@ -335,18 +343,20 @@ int gf_poly_interpolate(const gf_field_t *field, gf_elem_t *coeffs,
         gf_elem_t weight;
 
         /* Q = M / (X - x_i) by synthetic division */
-        Q[k - 1] = M[k];
+        Q[k - 1] = M[k]; //bring down first coefficient
         for (size_t j = k - 1; j > 0; --j) {
             gf_elem_t term;
-            gf_mul(field, &term, &Q[j], &xs[i]);
-            gf_add(field, &Q[j - 1], &M[j], &term);
+            gf_mul(field, &term, &Q[j], &xs[i]); //multiply coefficient by x_i
+            gf_add(field, &Q[j - 1], &M[j], &term); //add to next lower coefficient
         }
 
-        gf_mul(field, &weight, &ys[i], &inv_d[i]);
+        
+        gf_mul(field, &weight, &ys[i], &inv_d[i]); // weight = y_i/d_i = y_i / prod_{j != i} (x_i + x_j)
 
+        //y_i*ell_i (as defined in wiki) = weight * Q (multiply each coefficient by weight). The polynomial coefficients are now all y_i*ell_i summed up. Therefore, for each i,j<k: coefficients[j] += (y_i*ell_i)[j]
         for (size_t j = 0; j < k; ++j) {
             gf_elem_t term;
-            gf_mul(field, &term, &Q[j], &weight);
+            gf_mul(field, &term, &Q[j], &weight); 
             gf_add(field, &coeffs[j], &coeffs[j], &term);
         }
     }

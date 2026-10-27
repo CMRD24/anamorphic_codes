@@ -27,7 +27,7 @@ typedef struct {
     size_t rows;
     size_t cols;
     size_t row_weight;
-    size_t *positions;    /* row i: positions[i * row_weight .. (i + 1) * row_weight) */
+    size_t *positions;    /* row i: positions[i * row_weight ... (i + 1) * row_weight) */
 } SparseMatrix;
 
 BitVector bitvector_alloc(size_t bits);

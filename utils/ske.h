@@ -43,7 +43,7 @@ int ske_decrypt(
 
 /*
  * First bit of a keyed hash of input; used for the indication bits of the
- * randomness-recovery based anamorphic PRCs.
+ * randomness-recovery based anamorphic PRCs. (OPTIONAL: indications could be used for more efficient anamorphic decoding (receiver knows when to decrypt))
  */
 uint8_t ske_prf_bit(
     const uint8_t *key,

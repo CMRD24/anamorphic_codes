@@ -250,7 +250,7 @@ static uint8_t *ldpc_aencode(const void *params_ptr,
     random_bitvector(random, &s);
     column_matrix_mul_vector(&double_key->B, &s, &Bs);
 
-    uint8_t *codeword = ldpc_encode_secret(params, enc_key, &Bs, random, codeword_bits);
+    uint8_t *codeword = ldpc_encode_seed(params, enc_key, &Bs, random, codeword_bits);
 
     bitvector_free(&Bs);
     bitvector_free(&s);

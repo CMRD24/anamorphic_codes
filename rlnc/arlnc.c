@@ -1,5 +1,5 @@
 /*
- * Anamorphic RLNC (aRLNC): Reed-Solomon points hidden in the headers.
+ * Anamorphic RLNC (aRLNC): Reed-Solomon points hidden in the global encoding vectors.
  *
  * A symbol's global encoding vector gamma in F_q^K is split as gamma = (alpha, y)
  * with a label alpha in F_q^a (uniform) and y in E = GF(q^(K-a)) (identified with
@@ -61,7 +61,7 @@ static int params_init(const rlnc_config_t *config,
     if (aconfig->lambda == 0 ||
         config->generation_size < 2 * params->a ||
         aconfig->received_symbols < config->generation_size ||
-        params->a > 256 - 4)
+        params->a > 256 - 4) //4 bytes used for the prf counter
         return -1;
 
     params->degree = config->generation_size - params->a;
@@ -76,7 +76,7 @@ size_t rlnc_amessage_symbols(const rlnc_config_t *config, const rlnc_aconfig_t *
     if (params_init(config, aconfig, &params) != 0)
         return 0;
 
-    return (aconfig->received_symbols - 1) * params.degree;
+    return (aconfig->received_symbols - 1) * params.degree; //(S-1)*(K-a)
 }
 
 uint8_t *rlnc_akeygen(void)
@@ -101,6 +101,8 @@ void rlnc_akey_free(uint8_t *akey)
     free(akey);
 }
 
+//counter mode needed for PRF to produce long enough masks
+
 /*
  * F(s, alpha) in E: a keyed hash (BLAKE2b, libsodium crypto_generichash) of the
  * label and a block counter, used as a PRF and expanded in counter mode to K - a
@@ -119,18 +121,20 @@ static void prf_mask(const arlnc_params_t *params,
     gf_zero(mask);
 
     for (size_t i = 0; i < params->degree; ++i) {
-        if (i % sizeof(block) == 0) {
+        if (i % sizeof(block) == 0) { //need to sample new pseudorandom block:
             const uint32_t counter = (uint32_t)(i / sizeof(block));
 
+            //setting the last 4 bytes in input to the counter value:
             input[params->a + 0] = (uint8_t)counter;
             input[params->a + 1] = (uint8_t)(counter >> 8);
             input[params->a + 2] = (uint8_t)(counter >> 16);
             input[params->a + 3] = (uint8_t)(counter >> 24);
 
-            crypto_generichash(block, sizeof(block), input, params->a + 4,
-                               akey, crypto_generichash_KEYBYTES);
-        }
 
+            crypto_generichash(block, sizeof(block), input, params->a + 4,
+                               akey, crypto_generichash_KEYBYTES); //creates random block of 32 bytes
+        }
+        //apply the current block's i%32-th value to the i-th symbol
         gf_set_symbol(mask, i, params->symbol_bits, block[i % sizeof(block)] & (config->q - 1));
     }
 }
@@ -144,6 +148,8 @@ static void pad0(const arlnc_params_t *params, const uint8_t *alpha, gf_elem_t *
         gf_set_symbol(x, i, params->symbol_bits, alpha[i]);
 }
 
+//amessage has a only symbol_bits per byte (e.g. for q=2, each byte is either 0 or 1)
+
 /*
  * Creates T = sent_count >= S symbols for the generation `source`, hiding amessage:
  * for each symbol sample a fresh label alpha (resampled if it repeats, so all labels
@@ -155,7 +161,7 @@ int rlnc_aencode(
     const rlnc_config_t *config,
     const rlnc_aconfig_t *aconfig,
     const rlnc_packet_t *source,
-    rlnc_packet_t *sent,
+    rlnc_packet_t *sent_out,
     size_t sent_count,
     RandomnessSource *random,
     const uint8_t *akey,
@@ -163,7 +169,7 @@ int rlnc_aencode(
 {
     arlnc_params_t params;
 
-    if (source == NULL || sent == NULL || random == NULL || akey == NULL || amessage == NULL)
+    if (source == NULL || sent_out == NULL || random == NULL || akey == NULL || amessage == NULL)
         return -1;
 
     if (params_init(config, aconfig, &params) != 0)
@@ -173,7 +179,7 @@ int rlnc_aencode(
     if (sent_count < aconfig->received_symbols)
         return -1;
 
-    if (params.a * params.symbol_bits < 32 &&
+    if (params.a * params.symbol_bits < 32 && //don't allow security below 32-bits. Also, more less than 2^(a*symbol_bits) must be sent (otherwise collisions inevitable)
         ((uint64_t)1 << (params.a * params.symbol_bits)) < sent_count)
         return -1;
 
@@ -198,17 +204,22 @@ int rlnc_aencode(
         uint8_t *alpha = labels + j * params.a;
         int fresh;
 
-        /* uniform label, resampled on the (negligible) event of a repeat */
-        do {
-            fresh = 1;
-
-            for (size_t i = 0; i < params.a; ++i)
+        
+        for (size_t i = 0; i < params.a; ++i)
                 alpha[i] = (uint8_t)random_bounded(random, config->q);
 
-            for (size_t earlier = 0; earlier < j && fresh; ++earlier)
-                if (memcmp(alpha, labels + earlier * params.a, params.a) == 0)
-                    fresh = 0;
-        } while (!fresh);
+        // not needed (negligible) - negative for performance
+        // /* uniform label, resampled on the (negligible) event of a repeat */
+        // do {
+        //     fresh = 1;
+
+        //     for (size_t i = 0; i < params.a; ++i)
+        //         alpha[i] = (uint8_t)random_bounded(random, config->q);
+
+        //     for (size_t earlier = 0; earlier < j && fresh; ++earlier)
+        //         if (memcmp(alpha, labels + earlier * params.a, params.a) == 0)
+        //             fresh = 0;
+        // } while (!fresh);
 
         gf_elem_t x, y, mask;
 
@@ -219,13 +230,13 @@ int rlnc_aencode(
 
         memcpy(gamma, alpha, params.a);
         for (size_t symbol = 0; symbol < params.degree; ++symbol)
-            gamma[params.a + symbol] = (uint8_t)gf_get_symbol(&y, symbol, params.symbol_bits);
+            gamma[params.a + symbol] = (uint8_t)gf_get_symbol(&y, symbol, params.symbol_bits); //start after params.a bytes, because these belong to the label. The rest is the masked polynomial evaluation
 
         /*
          * The sources carry the canonical global encoding vectors e_i, so using
          * gamma as local vector yields global vector gamma and payload gamma^T W.
          */
-        if (rlnc_encode_with_vector(config, source, K, gamma, &sent[j]) != 0)
+        if (rlnc_encode_with_vector(config, source, K, gamma, &sent_out[j]) != 0)
             goto done;
     }
 
@@ -261,7 +272,7 @@ int rlnc_adecode(
     if (params_init(config, aconfig, &params) != 0)
         return -1;
 
-    /* codewords with a different number of symbols are rejected */
+    /* codewords with a different number of packets are rejected */
     if (received_count != aconfig->received_symbols)
         return -1;
 

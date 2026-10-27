@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// We assume for the implementation that q^(K-a) <= 2^1024
+
 /*
  * Arithmetic in the binary extension field E = GF(2^N), N <= GF_MAX_BITS.
  *

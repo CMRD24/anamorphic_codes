@@ -191,7 +191,7 @@ static uint8_t **aencode(const RR_Shape *shape, const SeededEncoder *encoder,
         if (i == 0)
             first_bits = bits;
 
-        ok = codewords[i] != NULL && bits == first_bits;
+        ok = codewords[i] != NULL && bits == first_bits; //consisteny check: all codewords must have same length
     }
 
     sodium_memzero(seeds, shape->codeword_count * seed_bytes);
@@ -336,7 +336,7 @@ int ambprc_rr_adecode(const aMBPRC_RR *aprc,
     MultibitRecovery recovery = {
         .prc = aprc->prc,
         .dec_key = dec_key,
-        .message = calloc(1, (message_bits + 7) / 8 + 1),
+        .message = calloc(1, (message_bits + 7) / 8 + 1),//allocated for the regular message used in recover_decode of the MBPRC_RR
     };
 
     if (recovery.message == NULL)

@@ -17,18 +17,18 @@ void copy_bits(uint8_t *dst, size_t dst_bit, const uint8_t *src, size_t src_bit,
 static inline uint8_t
 get_bit(const uint8_t *data, size_t index)
 {
-    return (uint8_t)((data[index >> 3] >> (index & 7)) & 1u);
+    return (uint8_t)((data[index >> 3] >> (index & 7)) & 1u); // [index/8] >> index%8
 }
 
 static inline void
 set_bit(uint8_t *data, size_t index, uint8_t value)
 {
-    const uint8_t mask = (uint8_t)(1u << (index & 7));
+    const uint8_t mask = (uint8_t)(1u << (index & 7)); //mask with 1 at the index%8-th position
 
     if (value)
         data[index >> 3] |= mask;
     else
-        data[index >> 3] &= (uint8_t)~mask;
+        data[index >> 3] &= (uint8_t)~mask; //deletes because of mask negation and &
 }
 
 /* a == b for len bytes, in time independent of the contents */

@@ -1,3 +1,8 @@
+// The previous (manual) implementation of this PRC was done before the choice was made to only consider PRCs 
+// for length-preserving channels (BSC in particular). I left it in because it is a simple way to make 
+// a PRC codeword robust to deletions, but it is not part of the anamorphic codes.
+// I checked this implementation less thorougly than the others.
+
 /*
  * Zero-bit PRC for channels with deletions and insertions (substitutions), built
  * on any zero-bit PRC with codewords of k bits: each codeword bit is expanded into

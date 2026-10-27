@@ -6,8 +6,6 @@
  * N || (message XOR PRF_key(N)). If the nonce is uniform and never repeats, the
  * whole ciphertext is indistinguishable from a uniform string (a pseudorandom
  * ciphertext, IND$-CPA), which is what the randomness-recovery anamorphism needs.
- * With a random nonce of n bytes, repeats occur with probability about
- * q^2 / 2^(8n) after q encryptions.
  *
  * The encryption is not authenticated: a modified ciphertext decrypts to a
  * modified message, and every string of the right length decrypts to something.

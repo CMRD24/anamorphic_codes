@@ -40,7 +40,7 @@ size_t hamming_distance(const uint8_t *a, const uint8_t *b, size_t len)
     size_t distance = 0;
 
     for (size_t i = 0; i < len; i++)
-        distance += (size_t)__builtin_popcount((unsigned int)(a[i] ^ b[i]));
+        distance += (size_t)__builtin_popcount((unsigned int)(a[i] ^ b[i])); //gcc compiler function
 
     return distance;
 }

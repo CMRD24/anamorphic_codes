@@ -1,6 +1,8 @@
 #ifndef GF_IRREDUCIBLE_H
 #define GF_IRREDUCIBLE_H
 
+//done to increase the performance of the anamorphic mode
+
 /*
  * Low-weight irreducible polynomials over GF(2) for the fields GF(2^n),
  * 2 <= n <= 1024 (the field polynomials of gf_ext.c).
@@ -14,13 +16,13 @@
  * produced the table, so a field is identical to the one earlier versions found
  * by searching.
  *
- * Every entry was checked independently with Rabin's irreducibility test
- * (M. O. Rabin, "Probabilistic algorithms in finite fields", SIAM J. Comput.
- * 9(2), 1980): f of degree n is irreducible iff x^(2^n) = x mod f and
+ * Every entry was checked independently with Ben-Or's irreducibility test
+ * (Michael Ben-Or, "Probabilistic algorithms in finite fields"): 
+ * f of degree n is irreducible iff x^(2^n) = x mod f and
  * gcd(x^(2^(n/p)) - x, f) = 1 for every prime p dividing n. Tables of
  * low-weight irreducible polynomials for all degrees are also given by
- * G. Seroussi, "Table of low-weight binary irreducible polynomials", HP Labs
- * technical report HPL-98-135, 1998 (the polynomials here need not coincide with
+ * G. Seroussi, "Table of low-weight binary irreducible polynomials", 
+ * (https://de.scribd.com/document/49721474/table-IP) (the polynomials here need not coincide with
  * its choice).
  */
 

@@ -46,7 +46,7 @@ void random_bitvector(RandomnessSource *random, BitVector *v)
     random_bytes(random, (uint8_t *)v->data, v->words * sizeof(uint64_t));
 
     if (v->bits % 64 != 0)
-        v->data[v->words - 1] &= (UINT64_C(1) << (v->bits % 64)) - 1;
+        v->data[v->words - 1] &= (UINT64_C(1) << (v->bits % 64)) - 1; //clears the higher bits
 }
 
 /*
@@ -63,7 +63,7 @@ void random_bernoulli_vector(RandomnessSource *random, BitVector *v, double prob
         return;
 
     for (size_t i = 0; i < v->bits; ++i) {
-        const double uniform = (double)(random_u64(random) >> 11) / 9007199254740992.0;
+        const double uniform = (double)(random_u64(random) >> 11) / 9007199254740992.0; //53 bits of the double's precision are used (that is why >> 11 is necessary. 9007199254740992 is 2^53)
 
         if (uniform < probability)
             bitvector_set_bit(v, i, 1);
@@ -74,14 +74,14 @@ void random_bernoulli_vector(RandomnessSource *random, BitVector *v, double prob
  * A uniform integer in [0, bound) by rejection sampling: x % bound is biased unless x is
  * uniform on a multiple of bound, so the first 2^64 mod bound values (threshold) are
  * rejected and the rest reduced (the "debiased modulo" method also used by OpenBSD's
- * arc4random_uniform). The expected number of draws is below 2.
+ * arc4random_uniform: https://man.openbsd.org/arc4random). The expected number of draws is below 2.
  */
 size_t random_bounded(RandomnessSource *random, size_t bound)
 {
     if (random == NULL || bound == 0)
         randomness_failure();
 
-    const uint64_t threshold = -((uint64_t)bound) % (uint64_t)bound;
+    const uint64_t threshold = -((uint64_t)bound) % (uint64_t)bound; //mod before subtraction: leads to the largest possible multiple of bound
     uint64_t x;
 
     do {
@@ -93,8 +93,8 @@ size_t random_bounded(RandomnessSource *random, size_t bound)
 
 /*
  * A uniform random permutation (permutation[input_position] = output_position)
- * by the Fisher-Yates shuffle in Durstenfeld's form (R. Durstenfeld, CACM 7(7), 1964;
- * D. E. Knuth, TAOCP vol. 2, section 3.4.2, algorithm P): for i = length-1 down to 1
+ * by the Fisher-Yates shuffle (https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle): 
+ * for i = length-1 down to 1
  * swap permutation[i] with permutation[j], j uniform in [0, i]. Every permutation has
  * probability 1/length!.
  */

@@ -486,7 +486,7 @@ static AMBPRC_Keys *alow_akeygen(const void *params_ptr, const void *aparams_ptr
 
     akeys->double_key->double_key = underlying_akeys->double_key;
     akeys->trapdoor_key->trapdoor_key = underlying_akeys->trapdoor_key;
-    free(underlying_akeys);
+    free(underlying_akeys);//ok, because underlying_akeys does not own dk & tk
 
     return akeys;
 
@@ -516,7 +516,7 @@ static uint8_t *alow_aencode(const void *params_ptr,
         return NULL;
 
     for (size_t i = 0; i <= params->ell; ++i)
-        nonzero |= get_bit(amessage, i);
+        nonzero |= get_bit(amessage, i);//bitwise xor to check if at least one "1" in anamorphic message
 
     /* the all-zero message means "no anamorphic message" */
     if (!nonzero)

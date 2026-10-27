@@ -33,7 +33,7 @@ static int fill(uint8_t *out, size_t len)
             continue;
         }
 
-        if (ret < 0 && errno == EINTR)
+        if (ret < 0 && errno == EINTR) //EINTR stands for interrupted system call.
             continue;
 
         return 0;
@@ -45,12 +45,12 @@ static int fill(uint8_t *out, size_t len)
 /* Returns 1 on success, 0 on failure. */
 int linux_secure_random(void *ctx, uint8_t *out, size_t len)
 {
-    static _Thread_local uint8_t buffer[BUFFER_BYTES];
+    static _Thread_local uint8_t buffer[BUFFER_BYTES]; //same thread gets same (already filled) buffer
     static _Thread_local size_t available;     /* unused bytes at the end of buffer */
 
     (void)ctx;
 
-    if (len >= BUFFER_BYTES / 4)
+    if (len >= BUFFER_BYTES / 4) //large enough to fill directly (4 is arbitrary)
         return fill(out, len);
 
     while (len > 0) {
@@ -60,11 +60,11 @@ int linux_secure_random(void *ctx, uint8_t *out, size_t len)
             available = BUFFER_BYTES;
         }
 
-        size_t take = len < available ? len : available;
+        size_t take = len < available ? len : available; //available is possibly smaller than len
         uint8_t *src = buffer + BUFFER_BYTES - available;
 
         memcpy(out, src, take);
-        memset(src, 0, take);
+        memset(src, 0, take); //(do not leave the randomness laying around)
 
         out += take;
         len -= take;

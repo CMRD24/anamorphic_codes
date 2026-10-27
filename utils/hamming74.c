@@ -1,8 +1,9 @@
 #include "ecc.h"
 
+//used for simple testing
+
 /*
- * Hamming(7,4) code (R. W. Hamming, "Error detecting and error correcting codes",
- * Bell System Technical Journal 29(2), 1950).
+ * Hamming(7,4) code (https://en.wikipedia.org/wiki/Hamming(7,4)).
  *
  * A linear [7,4,3] code over F_2: 4 data bits d are extended by 3 parity bits so
  * that the codeword c satisfies H c = 0 for the parity-check matrix H whose column

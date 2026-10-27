@@ -66,7 +66,8 @@ static size_t ldpc_block_length(const void *params)
 /*
  * (P, G) <- LDPC[n, g, t, r] and z <- F_2^n: samples P, then the g columns of G
  * as independent, uniform elements of ker P (sparse_matrix_sample_kernel). Fails
- * for parameters that are not structurally valid.
+ * for parameters that are not structurally valid. It does NOT assess/check the security level achievable
+ * by the chosen parameters! 
  */
 static ZBPRC_Keys *ldpc_keygen(const void *params_ptr, RandomnessSource *random)
 {
@@ -106,7 +107,7 @@ static ZBPRC_Keys *ldpc_keygen(const void *params_ptr, RandomnessSource *random)
     return keys;
 }
 
-uint8_t *ldpc_encode_secret(const LDPCParams *params,
+uint8_t *ldpc_encode_seed(const LDPCParams *params,
                             const ZBPRC_EncKey *enc_key,
                             const BitVector *x,
                             RandomnessSource *random,
@@ -172,7 +173,7 @@ static uint8_t *ldpc_encode(const void *params_ptr,
 
     random_bitvector(random, &s);
 
-    uint8_t *codeword = ldpc_encode_secret(params, enc_key, &s, random, codeword_bits);
+    uint8_t *codeword = ldpc_encode_seed(params, enc_key, &s, random, codeword_bits);
 
     bitvector_free(&s);
 
@@ -185,7 +186,8 @@ static int ldpc_decode(const void *params_ptr,
                        const uint8_t *codeword,
                        size_t codeword_bits)
 {
-    if (params_ptr == NULL || dec_key == NULL)
+    (void)params_ptr;
+    if (dec_key == NULL)
         return 0;
 
     return ldpc_syndrome_test(&dec_key->P, &dec_key->z, codeword, codeword_bits);
