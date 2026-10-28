@@ -52,6 +52,16 @@ typedef struct DemoPrc {
  */
 int demo_prc_finish(DemoPrc *prc, const DemoKeys *keys);
 
+/* the anamorphic key of the lifting (from the regular keys) or of the randomness recovery */
+int demo_prc_akeygen(void *handle, const uint8_t key[DEMO_KEY_BYTES]);
+
+/*
+ * Uniformly random messages: the regular message of message_bits bits ("" for
+ * zero-bit PRCs), the anamorphic message as amessage_bytes bytes (randomness
+ * recovery) or as a nonzero 0/1 string (lifting), "" for the native LDPC mode.
+ */
+int demo_prc_sample_messages(void *handle, char **message, char **amessage);
+
 void demo_prc_close(void *handle);
 int demo_prc_encode(void *handle, const char *message, DemoCiphertext *out);
 int demo_prc_decode(void *handle, const DemoCiphertext *in);

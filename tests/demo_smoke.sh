@@ -98,6 +98,12 @@ check_code rlnc    0 1 "regular text" "hidden text"
 # with indication seeds (mu > 1) the decoder rejects regular ciphertexts again
 check_code cca     1 1 "ping"        "hide-me"        indication_seeds=4
 
+# hex messages ("hex:68656c6c6f" is "hello"); a malformed one is rejected
+run rlnc encode "hex:68656c6c6f" "$WORK/hex.ct"; ok "rlnc encode of a hex message"
+run rlnc decode "$WORK/hex.ct"; ok "rlnc decode of a hex message"
+expect "message: hello" "hex message not recovered"
+run rlnc encode "hex:6g" "$WORK/hex.ct"; [ "$STATUS" -ne 0 ] || fail "malformed hex message accepted"
+
 # parameters that violate a requirement of the LDPC PRC are rejected
 run ldpc setup n=1024 epsilon=3/4; [ "$STATUS" -ne 0 ] || fail "LDPC parameters with r <= 16 accepted"
 

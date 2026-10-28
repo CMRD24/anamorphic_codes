@@ -10,14 +10,16 @@
  *   - generates K keys (a fresh random key each time),
  *   - for every key performs N rounds of
  *         encode -> decode -> aencode -> adecode
- *     on the same messages,
+ *     with a fresh uniformly random regular and anamorphic message per round
+ *     (sampled outside the measurement, DemoOps.sample_messages),
  * and reports mean, standard deviation and minimum of every operation, the
  * overhead of the anamorphic operations, and the ciphertext sizes.
  *
  * Key generation is measured through the demo front end: opening a code with
- * only the regular key is the regular key generation, opening it with both
- * keys additionally runs the anamorphic key generation (reported as the
- * difference). Keyless codes (rlnc, wiretap) only have an anamorphic key.
+ * only the regular key is the regular key generation; the anamorphic key is
+ * then generated on that handle (DemoOps.akeygen), from its regular keys, so
+ * the regular keys are generated once per key. Keyless codes (rlnc, wiretap)
+ * only have an anamorphic key.
  */
 
 #include <fcntl.h>
@@ -37,21 +39,19 @@
 typedef struct {
     const char *name;
     const DemoOps *ops;
-    const char *message;     /* regular message */
-    const char *amessage;    /* anamorphic message */
 } BenchCode;
 
 static const BenchCode codes[] = {
-    {"ldpc",    &demo_ldpc_ops,    "",             ""},
-    {"pp",      &demo_pp_ops,      "",             "anamorphic-text"},
-    {"1a",      &demo_1a_ops,      "1",            "1"},
-    {"low",     &demo_low_ops,     "hello",        "10110"},
-    {"high",    &demo_high_ops,    "hi-there",     "hide-me"},
-    {"sharp",   &demo_sharp_ops,   "ping",         "hide-me"},
-    {"cca",     &demo_cca_ops,     "ping",         "hide-me"},
-    {"rlnc",    &demo_rlnc_ops,    "regular text", "hidden text"},
+    {"ldpc",    &demo_ldpc_ops},
+    {"pp",      &demo_pp_ops},
+    {"1a",      &demo_1a_ops},
+    {"low",     &demo_low_ops},
+    {"high",    &demo_high_ops},
+    {"sharp",   &demo_sharp_ops},
+    {"cca",     &demo_cca_ops},
+    {"rlnc",    &demo_rlnc_ops},
 #ifndef BENCH_NO_WIRETAP
-    {"wiretap", &demo_wiretap_ops, "regular text", "hidden text"},
+    {"wiretap", &demo_wiretap_ops},
 #endif
 };
 
@@ -217,6 +217,73 @@ static int build_params(const BenchCode *code, const Options *opt, DemoParams *p
     return 0;
 }
 
+/*
+ * One round encode -> decode -> aencode -> adecode with fresh random messages
+ * (sampled before the measurement). result == NULL: an untimed warm-up round.
+ * Returns -1 if the messages cannot be sampled.
+ */
+static int run_round(const DemoOps *ops, void *handle, CodeResult *result)
+{
+    DemoCiphertext ciphertext = {0}, aciphertext = {0};
+    char *message, *amessage;
+    double start, elapsed;
+    int status;
+
+    if (ops->sample_messages(handle, &message, &amessage) != 0)
+        return -1;
+
+    start = now_ms();
+    status = ops->encode(handle, message, &ciphertext);
+    elapsed = now_ms() - start;
+    if (result != NULL) {
+        samples_add(&result->encode, elapsed);
+        result->encode.failures += status != 0;
+    }
+    if (status != 0)
+        goto done;
+
+    start = now_ms();
+    status = ops->decode(handle, &ciphertext);
+    elapsed = now_ms() - start;
+    if (result != NULL) {
+        samples_add(&result->decode, elapsed);
+        result->decode.failures += status != 0;
+    }
+
+    start = now_ms();
+    status = ops->aencode(handle, message, amessage, &aciphertext);
+    elapsed = now_ms() - start;
+    if (result != NULL) {
+        samples_add(&result->aencode, elapsed);
+        result->aencode.failures += status != 0;
+    }
+    if (status != 0)
+        goto done;
+
+    start = now_ms();
+    status = ops->adecode(handle, &aciphertext);
+    elapsed = now_ms() - start;
+    if (result != NULL) {
+        samples_add(&result->adecode, elapsed);
+        result->adecode.failures += status != 0;
+
+        if (result->regular_count == 0) {
+            result->regular_count = ciphertext.count;
+            result->regular_bits = ciphertext.bits;
+            result->anamorphic_count = aciphertext.count;
+            result->anamorphic_bits = aciphertext.bits;
+        }
+    }
+
+done:
+    demo_ct_free(&ciphertext);
+    demo_ct_free(&aciphertext);
+    free(message);
+    free(amessage);
+
+    return 0;
+}
+
 static int run_code(const BenchCode *code, const Options *opt, CodeResult *result)
 {
     const DemoOps *ops = code->ops;
@@ -224,6 +291,9 @@ static int run_code(const BenchCode *code, const Options *opt, CodeResult *resul
     const size_t rounds = opt->keys * opt->ops;
 
     memset(result, 0, sizeof(*result));
+
+    if (ops->akeygen == NULL || ops->sample_messages == NULL)
+        return -1;
 
     if (build_params(code, opt, &params) != 0)
         return -1;
@@ -238,7 +308,7 @@ static int run_code(const BenchCode *code, const Options *opt, CodeResult *resul
 
     for (size_t k = 0; k < opt->keys; ++k) {
         DemoKeys keys = {0};
-        void *handle, *regular_only;
+        void *handle;
         double start;
 
         randombytes_buf(keys.regular, sizeof(keys.regular));
@@ -246,88 +316,38 @@ static int run_code(const BenchCode *code, const Options *opt, CodeResult *resul
 
         /* regular key generation (opening with the regular key only) */
         keys.have_regular = ops->regular_keys;
-        keys.have_anamorphic = 0;
-        start = now_ms();
-        regular_only = ops->open(&params, &keys);
-        const double t_regular = now_ms() - start;
-
-        if (regular_only == NULL)
-            return -1;
-        ops->close(regular_only);
-
-        /* with the anamorphic key as well */
-        keys.have_anamorphic = 1;
         start = now_ms();
         handle = ops->open(&params, &keys);
-        const double t_both = now_ms() - start;
+        const double t_regular = now_ms() - start;
 
         if (handle == NULL)
             return -1;
 
+        /* anamorphic key generation from the regular keys of the handle */
+        start = now_ms();
+        const int akeygen_status = ops->akeygen(handle, keys.anamorphic);
+        const double t_anamorphic = now_ms() - start;
+
+        if (akeygen_status != 0) {
+            ops->close(handle);
+            return -1;
+        }
+
         if (ops->regular_keys)
             samples_add(&result->keygen_regular, t_regular);
-        samples_add(&result->keygen_anamorphic, ops->regular_keys ? (t_both > t_regular ? t_both - t_regular : 0)
-                                                      : t_both);
+        samples_add(&result->keygen_anamorphic, t_anamorphic);
 
         /* one untimed round per key: first-use costs (cold caches, lazy
          * allocation) would otherwise dominate small samples */
-        {
-            DemoCiphertext ciphertext = {0}, aciphertext = {0};
+        int status = run_round(ops, handle, NULL);
 
-            if (ops->encode(handle, code->message, &ciphertext) == 0) {
-                ops->decode(handle, &ciphertext);
-                demo_ct_free(&ciphertext);
-            }
-            if (ops->aencode(handle, code->message, code->amessage, &aciphertext) == 0) {
-                ops->adecode(handle, &aciphertext);
-                demo_ct_free(&aciphertext);
-            }
-        }
-
-        for (size_t i = 0; i < opt->ops; ++i) {
-            DemoCiphertext ciphertext = {0}, aciphertext = {0};
-
-            start = now_ms();
-            int code_status = ops->encode(handle, code->message, &ciphertext);
-            samples_add(&result->encode, now_ms() - start);
-            if (code_status != 0) {
-                result->encode.failures++;
-                continue;
-            }
-
-            start = now_ms();
-            code_status = ops->decode(handle, &ciphertext);
-            samples_add(&result->decode, now_ms() - start);
-            if (code_status != 0)
-                result->decode.failures++;
-
-            start = now_ms();
-            code_status = ops->aencode(handle, code->message, code->amessage, &aciphertext);
-            samples_add(&result->aencode, now_ms() - start);
-            if (code_status != 0) {
-                result->aencode.failures++;
-                demo_ct_free(&ciphertext);
-                continue;
-            }
-
-            start = now_ms();
-            code_status = ops->adecode(handle, &aciphertext);
-            samples_add(&result->adecode, now_ms() - start);
-            if (code_status != 0)
-                result->adecode.failures++;
-
-            if (result->regular_count == 0) {
-                result->regular_count = ciphertext.count;
-                result->regular_bits = ciphertext.bits;
-                result->anamorphic_count = aciphertext.count;
-                result->anamorphic_bits = aciphertext.bits;
-            }
-
-            demo_ct_free(&ciphertext);
-            demo_ct_free(&aciphertext);
-        }
+        for (size_t i = 0; status == 0 && i < opt->ops; ++i)
+            status = run_round(ops, handle, result);
 
         ops->close(handle);
+
+        if (status != 0)
+            return -1;
     }
 
     result->ok = 1;
@@ -344,11 +364,11 @@ static void print_row(FILE *out, const char *name, const Samples *samples)
     Stats stats = stats_of(samples);
 
     if (stats.count == 0) {
-        fprintf(out, "  %-24s %10s\n", name, "n/a");
+        fprintf(out, "  %-24s %14s\n", name, "n/a");
         return;
     }
 
-    fprintf(out, "  %-24s %10.3f %10.3f %10.3f %7zu", name, stats.mean, stats.stddev, stats.min, stats.count);
+    fprintf(out, "  %-24s %14.6f %14.6f %14.6f %7zu", name, stats.mean, stats.stddev, stats.min, stats.count);
     if (samples->failures > 0)
         fprintf(out, "   (%zu failed)", samples->failures);
     fprintf(out, "\n");
@@ -362,7 +382,7 @@ static void print_ratio(FILE *out, const char *name, const Samples *regular,
     if (a.count == 0 || b.count == 0 || a.mean <= 0)
         return;
 
-    fprintf(out, "  %-24s x%-8.2f (%+.3f ms)\n", name, b.mean / a.mean, b.mean - a.mean);
+    fprintf(out, "  %-24s x%-10.4f (%+.6f ms)\n", name, b.mean / a.mean, b.mean - a.mean);
 }
 
 static void csv_row(FILE *csv, const char *code, const char *op, const Samples *samples)
@@ -382,12 +402,11 @@ static void report(FILE *out, FILE *csv, const BenchCode *code, const Options *o
 
     fprintf(out, "\n== %s  (%zu key%s x %zu round%s)\n", code->name, opt->keys,
             opt->keys == 1 ? "" : "s", opt->ops, opt->ops == 1 ? "" : "s");
-    fprintf(out, "  %-24s %10s %10s %10s %7s\n", "operation", "mean [ms]", "stddev", "min", "n");
+    fprintf(out, "  %-24s %14s %14s %14s %7s\n", "operation", "mean [ms]", "stddev", "min", "n");
 
     if (code->ops->regular_keys)
         print_row(out, "keygen (regular)", &result->keygen_regular);
-    print_row(out, code->ops->regular_keys ? "keygen (anamorphic, +)" : "keygen (anamorphic)",
-              &result->keygen_anamorphic);
+    print_row(out, "keygen (anamorphic)", &result->keygen_anamorphic);
     print_row(out, "encode", &result->encode);
     print_row(out, "aencode", &result->aencode);
     print_row(out, "decode", &result->decode);
@@ -445,7 +464,8 @@ static void usage(const char *prog)
         "                            e.g. --param low:ell=16 --param rlnc:lambda=32\n"
         "  --csv FILE                additionally write the results as CSV\n"
         "\n"
-        "Every round runs encode, decode, aencode and adecode with fresh randomness.\n");
+        "Every round runs encode, decode, aencode and adecode with fresh randomness\n"
+        "and fresh uniformly random messages.\n");
 }
 
 static int parse_size(const char *samples, size_t *out)
@@ -585,6 +605,7 @@ int main(int argc, char **argv)
             status = 1;
         } else {
             report(out, csv, &codes[i], &opt, &result);
+            fflush(out); /* before the progress line of the next code on stderr */
         }
 
         code_result_free(&result);

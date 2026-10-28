@@ -202,7 +202,7 @@ int rlnc_aencode(
 
     for (size_t j = 0; j < sent_count; ++j) {
         uint8_t *alpha = labels + j * params.a;
-        int fresh;
+        //int fresh;
 
         
         for (size_t i = 0; i < params.a; ++i)

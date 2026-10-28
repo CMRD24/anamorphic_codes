@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <sodium.h>
+
 #include "utils/csprg_sodium.h"
 #include "utils/helpers.h"
 
@@ -83,21 +85,9 @@ int demo_prc_finish(DemoPrc *prc, const DemoKeys *keys)
         }
     }
 
-    if (prc->lifting != NULL) {
-        if (keys->have_anamorphic && prc->multibit_keys != NULL) {
-            stream = demo_key_stream(keys->anamorphic, DEMO_DOMAIN_ANAMORPHIC);
-            prc->lifting_akeys = mbprc_akeygen(&prc->multibit_prc, prc->lifting,
-                                               prc->multibit_keys, &stream);
-            csprg_randomness_free(&stream);
-
-            if (prc->lifting_akeys == NULL) {
-                fprintf(stderr, "anamorphic key generation failed (check the parameters)\n");
-                return -1;
-            }
-        }
-
-        return 0;
-    }
+    if (prc->lifting != NULL)
+        return keys->have_anamorphic && prc->multibit_keys != NULL
+            ? demo_prc_akeygen(prc, keys->anamorphic) : 0;
 
     if (!has_rr(prc))
         return 0;
@@ -118,15 +108,104 @@ int demo_prc_finish(DemoPrc *prc, const DemoKeys *keys)
     prc->zerobit_rr_aprc = (aZBPRC_RR){.shape = shape, .prc = prc->zerobit_rr};
     prc->multibit_rr_aprc = (aMBPRC_RR){.shape = shape, .prc = prc->multibit_rr};
 
-    if (keys->have_anamorphic) {
-        stream = demo_key_stream(keys->anamorphic, DEMO_DOMAIN_ANAMORPHIC);
-        prc->rr_akeys = rr_akeygen(&stream);
-        csprg_randomness_free(&stream);
+    return keys->have_anamorphic ? demo_prc_akeygen(prc, keys->anamorphic) : 0;
+}
 
-        if (prc->rr_akeys == NULL) {
-            fprintf(stderr, "anamorphic key generation failed\n");
+int demo_prc_akeygen(void *handle, const uint8_t key[DEMO_KEY_BYTES])
+{
+    DemoPrc *prc = handle;
+    RandomnessSource stream;
+
+    if (prc->lifting != NULL) {
+        if (prc->multibit_keys == NULL) {
+            fprintf(stderr, "the anamorphic key generation needs the regular key\n");
             return -1;
         }
+
+        mbprc_free_akeys(&prc->multibit_prc, prc->lifting, prc->lifting_akeys);
+
+        stream = demo_key_stream(key, DEMO_DOMAIN_ANAMORPHIC);
+        prc->lifting_akeys = mbprc_akeygen(&prc->multibit_prc, prc->lifting,
+                                           prc->multibit_keys, &stream);
+        csprg_randomness_free(&stream);
+
+        if (prc->lifting_akeys == NULL) {
+            fprintf(stderr, "anamorphic key generation failed (check the parameters)\n");
+            return -1;
+        }
+
+        return 0;
+    }
+
+    if (!has_rr(prc))
+        return 0;
+
+    rr_free_akeys(prc->rr_akeys);
+
+    stream = demo_key_stream(key, DEMO_DOMAIN_ANAMORPHIC);
+    prc->rr_akeys = rr_akeygen(&stream);
+    csprg_randomness_free(&stream);
+
+    if (prc->rr_akeys == NULL) {
+        fprintf(stderr, "anamorphic key generation failed\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* a uniformly random string of count characters 0/1 that contains a 1 */
+static char *random_nonzero_bits(size_t count)
+{
+    char *text = malloc(count + 1);
+    int nonzero = 0;
+
+    if (text == NULL || count == 0) {
+        free(text);
+        return NULL;
+    }
+
+    while (!nonzero) {
+        for (size_t i = 0; i < count; ++i) {
+            text[i] = (char)('0' + randombytes_uniform(2));
+            nonzero |= text[i] == '1';
+        }
+    }
+
+    text[count] = '\0';
+
+    return text;
+}
+
+int demo_prc_sample_messages(void *handle, char **message, char **amessage)
+{
+    DemoPrc *prc = handle;
+
+    if (prc->zerobit) {
+        *message = strdup("");
+    } else if (prc->message_bits < 8) {
+        /* written as a number, see parse_message */
+        char number[4];
+
+        snprintf(number, sizeof(number), "%u",
+                 (unsigned)randombytes_uniform(1u << prc->message_bits));
+        *message = strdup(number);
+    } else {
+        *message = demo_random_message(prc->message_bits);
+    }
+
+    if (prc->lifting != NULL)
+        *amessage = random_nonzero_bits(mbprc_amessage_bits(&prc->multibit_prc, prc->lifting));
+    else if (has_rr(prc))
+        *amessage = demo_random_message(8 * prc->amessage_bytes);
+    else
+        *amessage = strdup("");
+
+    if (*message == NULL || *amessage == NULL) {
+        free(*message);
+        free(*amessage);
+        *message = *amessage = NULL;
+        return -1;
     }
 
     return 0;

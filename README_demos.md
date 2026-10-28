@@ -81,9 +81,10 @@ of a string that is not a codeword), 2 on a usage error.
 
 ## Messages and ciphertext files
 
-Messages are plain strings, zero-padded to the size the code expects; a message
-that is too long is rejected. Decoded messages are printed as text (trailing
-zeros removed), or as hex if they are not printable.
+Messages are plain strings, or `hex:` followed by hex digits for arbitrary
+bytes (e.g. `hex:00ff10`); they are zero-padded to the size the code expects, and
+a message that is too long is rejected. Decoded messages are printed as text
+(trailing zeros removed), or as hex if they are not printable.
 
 | Demo | Regular `MESSAGE` | Anamorphic `AMESSAGE` |
 |---|---|---|
@@ -228,14 +229,21 @@ counted and shown next to the row.
 
 Notes:
 
+- Every round uses a fresh uniformly random regular and anamorphic message of
+  the full length the code expects, sampled outside the measurement: random
+  bytes for byte messages (for `rlnc` the whole generation, so every packet
+  payload is random), a random bit for `1a`, a random nonzero bit string for the
+  anamorphic message of `low`. `1a` has the single anamorphic message `1`, the
+  zero-bit codes (`ldpc`, `pp` regular) have no message. With `mu > 1` the `mu`
+  codewords of an anamorphic ciphertext carry the same regular message.
 - Every key first runs one untimed warm-up round, so the samples are
   `K * N` per operation.
 - Key generation is measured through the demo front end: the regular key
-  generation is opening the code with the regular key, the anamorphic one is
-  the additional time when the anamorphic key is present (reported as `+`; it
-  is about zero for the randomness-recovery codes, whose anamorphic key is just
-  random bytes). `rlnc` and `wiretap` are keyless and only have the anamorphic
-  key.
+  generation is opening the code with the regular key; the anamorphic key is
+  then generated on the same handle from its regular keys (they are generated
+  only once per key). It is about zero for the randomness-recovery codes, whose
+  anamorphic key is just random bytes. `rlnc` and `wiretap` are keyless and only
+  have the anamorphic key.
 - The randomness-recovery codes (`pp`, `high`, `sharp`, `cca`) use `mu = 1` by
   default, so an anamorphic ciphertext is as large as a regular one and the
   overhead is the encryption of the seed. Set `--param CODE:indication_seeds=N` or

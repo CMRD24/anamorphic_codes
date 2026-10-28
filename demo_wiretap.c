@@ -65,19 +65,50 @@ static void wiretap_close(void *handle)
     free(handle);
 }
 
+/* keyless code: the anamorphic key is the symmetric key itself */
+static int wiretap_akeygen_op(void *handle, const uint8_t key[DEMO_KEY_BYTES])
+{
+    Wiretap *wiretap = handle;
+
+    wiretap->have_key = 1;
+    memcpy(wiretap->key, key, sizeof(wiretap->key));
+
+    return 0;
+}
+
+/* a uniformly random regular message of one block and anamorphic message */
+static int wiretap_sample_messages(void *handle, char **message, char **amessage)
+{
+    const Wiretap *wiretap = handle;
+
+    *message = demo_random_message(8 * wiretap->config.block_bytes);
+    *amessage = demo_random_message(8 * wiretap->aconfig.amessage_bytes);
+
+    if (*message == NULL || *amessage == NULL) {
+        free(*message);
+        free(*amessage);
+        *message = *amessage = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
 /* pads the message to a positive multiple of block_bytes */
 static uint8_t *padded_message(const Wiretap *wiretap, const char *message, size_t *padded_len)
 {
     const size_t block_bytes = wiretap->config.block_bytes;
-    const size_t text_len = message != NULL ? strlen(message) : 0;
-    const size_t blocks = text_len == 0 ? 1 : (text_len + block_bytes - 1) / block_bytes;
+    const size_t message_len = demo_message_length(message);
+    const size_t blocks = message_len == 0 ? 1 : (message_len + block_bytes - 1) / block_bytes;
     uint8_t *padded;
 
     *padded_len = blocks * block_bytes;
-    padded = calloc(*padded_len, 1);
+    padded = malloc(*padded_len);
 
-    if (padded != NULL)
-        memcpy(padded, message != NULL ? message : "", text_len);
+    if (padded != NULL && demo_pad_message(message, padded, *padded_len) != 0) {
+        free(padded);
+        padded = NULL;
+    }
 
     return padded;
 }
@@ -198,6 +229,8 @@ const DemoOps demo_wiretap_ops = {
     .decode = wiretap_decode_op,
     .aencode = wiretap_aencode_op,
     .adecode = wiretap_adecode_op,
+    .akeygen = wiretap_akeygen_op,
+    .sample_messages = wiretap_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

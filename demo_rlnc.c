@@ -71,6 +71,38 @@ static void *rlnc_open(const DemoParams *params, const DemoKeys *keys)
     return NULL;
 }
 
+/* keyless code: the anamorphic key is the symmetric key itself */
+static int rlnc_akeygen_op(void *handle, const uint8_t key[DEMO_KEY_BYTES])
+{
+    RlncDemo *demo = handle;
+
+    demo->have_key = 1;
+    memcpy(demo->key, key, sizeof(demo->key));
+
+    return 0;
+}
+
+/*
+ * A uniformly random generation (every packet payload uniform) and a uniformly
+ * random anamorphic message (one byte per GF(q) symbol, reduced by aencode).
+ */
+static int rlnc_sample_messages(void *handle, char **message, char **amessage)
+{
+    const RlncDemo *demo = handle;
+
+    *message = demo_random_message(8 * demo->config.generation_size * demo->config.payload_bytes);
+    *amessage = demo_random_message(8 * rlnc_amessage_symbols(&demo->config, &demo->aconfig));
+
+    if (*message == NULL || *amessage == NULL) {
+        free(*message);
+        free(*amessage);
+        *message = *amessage = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
 static void rlnc_close(void *handle)
 {
     free(handle);
@@ -292,6 +324,8 @@ const DemoOps demo_rlnc_ops = {
     .decode = rlnc_decode_op,
     .aencode = rlnc_aencode_op,
     .adecode = rlnc_adecode_op,
+    .akeygen = rlnc_akeygen_op,
+    .sample_messages = rlnc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

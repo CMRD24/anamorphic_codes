@@ -80,8 +80,20 @@ void demo_ct_free(DemoCiphertext *ciphertext);
 
 /* ---- messages --------------------------------------------------------- */
 
-/* copies text into buffer, zero-padded; -1 if text is longer than len */
+/*
+ * A message is text, or "hex:" followed by hex digits for arbitrary bytes
+ * (e.g. "hex:00ff10").
+ */
+
+/* the length of a message in bytes */
+size_t demo_message_length(const char *text);
+
+/* copies the message into buffer, zero-padded; -1 if it is malformed or longer than len */
 int demo_pad_message(const char *text, uint8_t *buffer, size_t len);
+
+/* a uniformly random message of bits bits as "hex:..." (the unused high bits of
+ * the last byte are zero); NULL on allocation failure, free with free() */
+char *demo_random_message(size_t bits);
 
 /* prints bytes as text (trailing zeros trimmed), or as hex if not printable */
 void demo_print_bytes(const char *label, const uint8_t *buffer, size_t len);
@@ -103,6 +115,21 @@ typedef struct {
      */
     void *(*open)(const DemoParams *params, const DemoKeys *keys);
     void (*close)(void *handle);
+
+    /*
+     * Generates the anamorphic key of a code that was opened without it, from
+     * the anamorphic key seed and the regular keys of the handle (which are not
+     * generated again). open calls it when the anamorphic key is present.
+     * Returns 0, or -1 after printing the reason. NULL without anamorphic mode.
+     */
+    int (*akeygen)(void *handle, const uint8_t key[DEMO_KEY_BYTES]);
+
+    /*
+     * Samples a uniformly random regular and anamorphic message, written in the
+     * format that encode and aencode expect (used by the benchmark). Free both
+     * with free(). Returns 0, or -1 on allocation failure.
+     */
+    int (*sample_messages)(void *handle, char **message, char **amessage);
 
     /* All operations return 0 on success and -1 on failure/rejection and
      * print their result themselves. */

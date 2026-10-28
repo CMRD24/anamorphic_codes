@@ -70,6 +70,8 @@ const DemoOps demo_low_ops = {
     .decode = demo_prc_decode,
     .aencode = demo_prc_aencode,
     .adecode = demo_prc_adecode,
+    .akeygen = demo_prc_akeygen,
+    .sample_messages = demo_prc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

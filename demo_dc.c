@@ -57,6 +57,7 @@ const DemoOps demo_dc_ops = {
     .close = demo_prc_close,
     .encode = demo_prc_encode,
     .decode = demo_prc_decode,
+    .sample_messages = demo_prc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

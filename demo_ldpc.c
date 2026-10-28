@@ -30,6 +30,32 @@ static void ldpc_close(void *handle)
     demo_prc_close(&demo->base);
 }
 
+/* the native anamorphic key (P', B) on top of the regular keys (P, G, z) of the handle */
+static int ldpc_akeygen(void *handle, const uint8_t key[DEMO_KEY_BYTES])
+{
+    LdpcDemo *demo = handle;
+
+    if (demo->base.zerobit_keys == NULL) {
+        fprintf(stderr, "the anamorphic key generation needs the regular key\n");
+        return -1;
+    }
+
+    zbprc_free_akeys(&demo->base.zerobit_prc, &demo->aprc, demo->akeys);
+
+    RandomnessSource stream = demo_key_stream(key, DEMO_DOMAIN_ANAMORPHIC);
+
+    demo->akeys = zbprc_akeygen(&demo->base.zerobit_prc, &demo->aprc,
+                                demo->base.zerobit_keys, &stream);
+    csprg_randomness_free(&stream);
+
+    if (demo->akeys == NULL) {
+        fprintf(stderr, "anamorphic key generation failed (check the parameters)\n");
+        return -1;
+    }
+
+    return 0;
+}
+
 static void *ldpc_open(const DemoParams *params, const DemoKeys *keys)
 {
     LdpcDemo *demo = calloc(1, sizeof(*demo));
@@ -51,18 +77,10 @@ static void *ldpc_open(const DemoParams *params, const DemoKeys *keys)
         return NULL;
     }
 
-    if (keys->have_anamorphic && demo->base.zerobit_keys != NULL) {
-        RandomnessSource stream = demo_key_stream(keys->anamorphic, DEMO_DOMAIN_ANAMORPHIC);
-
-        demo->akeys = zbprc_akeygen(&demo->base.zerobit_prc, &demo->aprc,
-                                    demo->base.zerobit_keys, &stream);
-        csprg_randomness_free(&stream);
-
-        if (demo->akeys == NULL) {
-            fprintf(stderr, "anamorphic key generation failed (check the parameters)\n");
-            ldpc_close(demo);
-            return NULL;
-        }
+    if (keys->have_anamorphic && demo->base.zerobit_keys != NULL &&
+        ldpc_akeygen(demo, keys->anamorphic) != 0) {
+        ldpc_close(demo);
+        return NULL;
     }
 
     return demo;
@@ -129,6 +147,8 @@ const DemoOps demo_ldpc_ops = {
     .decode = demo_prc_decode,
     .aencode = ldpc_aencode,
     .adecode = ldpc_adecode,
+    .akeygen = ldpc_akeygen,
+    .sample_messages = demo_prc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

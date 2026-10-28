@@ -348,9 +348,28 @@ static int ct_read(const char *path, DemoCiphertext *ciphertext)
  * Messages
  * ------------------------------------------------------------------------ */
 
+#define HEX_PREFIX "hex:"
+#define HEX_PREFIX_LENGTH (sizeof(HEX_PREFIX) - 1)
+
+static int is_hex_message(const char *text)
+{
+    return text != NULL && strncmp(text, HEX_PREFIX, HEX_PREFIX_LENGTH) == 0;
+}
+
+size_t demo_message_length(const char *text)
+{
+    if (text == NULL)
+        return 0;
+
+    if (is_hex_message(text))
+        return strlen(text + HEX_PREFIX_LENGTH) / 2;
+
+    return strlen(text);
+}
+
 int demo_pad_message(const char *text, uint8_t *buffer, size_t len)
 {
-    size_t length = text == NULL ? 0 : strlen(text);
+    const size_t length = demo_message_length(text);
 
     if (length > len) {
         fprintf(stderr, "message too long: %zu bytes, at most %zu\n", length, len);
@@ -358,10 +377,42 @@ int demo_pad_message(const char *text, uint8_t *buffer, size_t len)
     }
 
     memset(buffer, 0, len);
-    if (length > 0)
+
+    if (is_hex_message(text)) {
+        const char *digits = text + HEX_PREFIX_LENGTH;
+
+        if (strlen(digits) % 2 != 0 || from_hex(digits, buffer, length) != 0) {
+            fprintf(stderr, "malformed hex message\n");
+            return -1;
+        }
+    } else if (length > 0) {
         memcpy(buffer, text, length);
+    }
 
     return 0;
+}
+
+char *demo_random_message(size_t bits)
+{
+    const size_t bytes = (bits + 7) / 8;
+    uint8_t *buffer = malloc(bytes ? bytes : 1);
+    char *text = malloc(HEX_PREFIX_LENGTH + 2 * bytes + 1);
+
+    if (buffer == NULL || text == NULL) {
+        free(buffer);
+        free(text);
+        return NULL;
+    }
+
+    randombytes_buf(buffer, bytes);
+    if (bits % 8 != 0)
+        buffer[bytes - 1] &= (uint8_t)((1u << (bits % 8)) - 1);
+
+    memcpy(text, HEX_PREFIX, HEX_PREFIX_LENGTH);
+    to_hex(buffer, bytes, text + HEX_PREFIX_LENGTH);
+    free(buffer);
+
+    return text;
 }
 
 void demo_print_bytes(const char *label, const uint8_t *buffer, size_t len)
@@ -429,6 +480,7 @@ static void usage(const DemoOps *ops)
         fprintf(stderr, "  adecode CIPHERTEXT\n");
     }
 
+    fprintf(stderr, "\nmessages are text, or hex:<hex digits> for arbitrary bytes\n");
     fprintf(stderr, "\nparameters (default):\n");
     for (size_t i = 0; ops->params[i].name != NULL; ++i) {
         fprintf(stderr, "  %-16s %-8s %s\n", ops->params[i].name,
