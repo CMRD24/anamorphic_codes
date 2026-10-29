@@ -16,6 +16,41 @@ static LDPCParams ldpc_params;
 
 #define BSC_P 0.003
 
+/* PRC_high protects the message only with Hamming(7,4) (one error per 7-bit block) */
+#define HIGH_BSC_P 0.0005
+
+/*
+ * PRC_sharp / PRC_cca over PRC_high (PRC^lambda_low over the LDPC PRC carries the
+ * seed of PRC_high, Hamming(7,4) its message), which encodes r || m || R2:
+ * lambda + message_bits + lambda bits. The instance must not be moved after init.
+ */
+typedef struct {
+    ZBPRC underlying;
+    PRCLow_Params low_params;
+    MBPRC low;
+    ECC ecc;
+    PRCHigh_Params high_params;
+    MBPRC high;
+    PRCReencode_Params params;
+} ReencodeInstance;
+
+static void reencode_instance_init(ReencodeInstance *instance, size_t lambda, size_t message_bits)
+{
+    instance->underlying = prc_ldpc(&ldpc_params);
+    instance->low_params = (PRCLow_Params){.underlying = &instance->underlying, .ell = lambda};
+    instance->low = prc_low(&instance->low_params);
+    instance->ecc = hamming74_ecc();
+    instance->high_params = (PRCHigh_Params){
+        .inner = &instance->low,
+        .ecc = &instance->ecc,
+        .lambda = lambda,
+        .message_bits = 2 * lambda + message_bits,
+    };
+    instance->high = prc_high(&instance->high_params);
+    instance->params = (PRCReencode_Params){.inner = &instance->high, .lambda = lambda,
+                                            .delta = 0.05};
+}
+
 /*
  * Encodes random messages of message_bits bits, optionally sends them through a
  * BSC, and checks that they are recovered. Also checks that random strings and
@@ -107,38 +142,32 @@ static void test_high(void)
     ECC ecc = hamming74_ecc();
     PRCHigh_Params high_params = {.inner = &low, .ecc = &ecc, .lambda = 64, .message_bits = 64};
     MBPRC prc = prc_high(&high_params);
-    mb_suite(&prc, 64, 5, 0.0005); /* Hamming(7,4) only corrects one error per block */
+    mb_suite(&prc, 64, 5, HIGH_BSC_P);
 }
 
-/* the inner PRC encodes r || m || R2: 16 + 32 + 16 bits */
+/* the inner PRC_high encodes r || m || R2: 16 + 32 + 16 bits */
 static void test_sharp(void)
 {
-    ZBPRC underlying = prc_ldpc(&ldpc_params);
-    PRCLow_Params low_params = {.underlying = &underlying, .ell = 64};
-    MBPRC low = prc_low(&low_params);
-    PRCReencode_Params params = {.inner = &low, .lambda = 16, .delta = 0.05};
-    MBPRC prc = prc_sharp(&params);
-    mb_suite(&prc, 32, 5, BSC_P);
+    ReencodeInstance instance;
+    reencode_instance_init(&instance, 16, 32);
+    MBPRC prc = prc_sharp(&instance.params);
+    mb_suite(&prc, 32, 5, HIGH_BSC_P);
 }
 
 static void test_cca(void)
 {
-    ZBPRC underlying = prc_ldpc(&ldpc_params);
-    PRCLow_Params low_params = {.underlying = &underlying, .ell = 64};
-    MBPRC low = prc_low(&low_params);
-    PRCReencode_Params params = {.inner = &low, .lambda = 16, .delta = 0.05};
-    MBPRC_RR rr = prc_cca_rr(&params);
-    mb_suite(&rr.base, 32, 5, BSC_P);
+    ReencodeInstance instance;
+    reencode_instance_init(&instance, 16, 32);
+    MBPRC_RR rr = prc_cca_rr(&instance.params);
+    mb_suite(&rr.base, 32, 5, HIGH_BSC_P);
 }
 
 /* RecDecode returns the seed r chosen by Encode, also through the BSC */
 static void reencode_seed_recovery(MBPRC_RR (*make_rr)(const PRCReencode_Params *))
 {
-    ZBPRC underlying = prc_ldpc(&ldpc_params);
-    PRCLow_Params low_params = {.underlying = &underlying, .ell = 64};
-    MBPRC low = prc_low(&low_params);
-    PRCReencode_Params params = {.inner = &low, .lambda = 16, .delta = 0.05};
-    MBPRC_RR rr = make_rr(&params);
+    ReencodeInstance instance;
+    reencode_instance_init(&instance, 16, 32);
+    MBPRC_RR rr = make_rr(&instance.params);
     MBPRC_Keys *keys = mbprc_keygen(&rr.base, &rng);
     CHECK(keys != NULL);
 
@@ -152,7 +181,7 @@ static void reencode_seed_recovery(MBPRC_RR (*make_rr)(const PRCReencode_Params 
                                          seed);
         CHECK(c != NULL);
         if (c == NULL) continue;
-        test_bsc(c, bits, BSC_P, &rng);
+        test_bsc(c, bits, HIGH_BSC_P, &rng);
 
         CHECK(rr.recover_decode(rr.base.params, keys->dec, c, bits, decoded, &decoded_bits,
                                 recovered) == 1);
@@ -176,11 +205,9 @@ static void test_cca_seed_recovery(void)
 /* all coins are derived from (sk, r, m): Encode with a fixed seed is deterministic */
 static void test_reencode_deterministic(void)
 {
-    ZBPRC underlying = prc_ldpc(&ldpc_params);
-    PRCLow_Params low_params = {.underlying = &underlying, .ell = 64};
-    MBPRC low = prc_low(&low_params);
-    PRCReencode_Params params = {.inner = &low, .lambda = 16, .delta = 0.05};
-    MBPRC_RR rr = prc_sharp_rr(&params);
+    ReencodeInstance instance;
+    reencode_instance_init(&instance, 16, 32);
+    MBPRC_RR rr = prc_sharp_rr(&instance.params);
     MBPRC_Keys *keys = mbprc_keygen(&rr.base, &rng);
     uint8_t seed[2] = {1, 2}, message[4] = {3, 4, 5, 6};
     size_t bits = 0;

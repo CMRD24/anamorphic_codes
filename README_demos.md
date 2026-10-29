@@ -12,8 +12,8 @@ codewords differ.
 | `demo_1a` | `PRC^1_adapt` (one bit) | yes | lifting of the LDPC anamorphic mode |
 | `demo_low` | `PRC_low` (ell bits) | yes | lifting of the LDPC anamorphic mode |
 | `demo_high` | `PRC_high` | yes | randomness recovery |
-| `demo_sharp` | `PRC_sharp` | yes | randomness recovery |
-| `demo_cca` | `PRC_cca` | yes | randomness recovery |
+| `demo_sharp` | `PRC_sharp` (on `PRC_high`) | yes | randomness recovery |
+| `demo_cca` | `PRC_cca` (on `PRC_high`) | yes | randomness recovery |
 | `demo_rlnc` | RLNC | – (keyless) | Reed-Solomon points in the headers |
 | `demo_wiretap` | wiretap code (OAEP4, Hamming(7,4)) | – (keyless) | randomness recovery |
 
@@ -139,7 +139,7 @@ a channel.
 | `low` | `n=65536 epsilon=3/4 delta=1/4 eta=0.005 ell=40` |
 | `pp` | `n=384 q=2 symbol_bits=1 seed_bytes=24 delta=0 ecc=hamming indication_seeds=0 amessage_bytes=16` |
 | `high` | `n=16384 epsilon=6/7 delta=1/4 eta=0.005 lambda=128 message_bits=64 indication_seeds=0 amessage_bytes=8` |
-| `sharp`, `cca` | `n=16384 epsilon=6/7 delta=1/4 eta=0.005 lambda=128 message_bits=32 distance=0.05 indication_seeds=0 amessage_bytes=8` |
+| `sharp`, `cca` | `n=16384 epsilon=6/7 delta=1/4 eta=0.005 lambda=128 message_bits=64 distance=0.05 indication_seeds=0 amessage_bytes=8` |
 | `rlnc` | `q=256 payload_bytes=64 generation_size=16 lambda=64 received_symbols=20 sent_symbols=40` |
 | `wiretap` | `block_bytes=32 lambda=128 amessage_bytes=16` |
 

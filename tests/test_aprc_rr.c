@@ -6,6 +6,7 @@
 #include "../prcs/zerobit/implementations/prc_pp.h"
 #include "../prcs/zerobit/implementations/prc_ldpc.h"
 #include "../prcs/anamorphism/zerobit/aprc_ldpc.h"
+#include "../prcs/multibit/implementations/prc_high.h"
 #include "../prcs/multibit/implementations/prc_low.h"
 #include "../prcs/multibit/implementations/prc_reencode.h"
 #include "../prcs/anamorphism/aprc_rr.h"
@@ -86,11 +87,18 @@ static void test_pp_anamorphic(void)
     zbprc_free_keys(&prc.base, keys);
 }
 
-/* PRC_cca over PRC^ell_low over the LDPC PRC; the caller frees *low and the result */
+/*
+ * PRC_cca over PRC_high (PRC^lambda_low over the LDPC PRC carries the seed of
+ * PRC_high, Hamming(7,4) its message r || m || R2). The instance must not be
+ * moved after init.
+ */
 typedef struct {
     ZBPRC underlying;
     PRCLow_Params low_params;
     MBPRC low;
+    ECC ecc;
+    PRCHigh_Params high_params;
+    MBPRC high;
     PRCReencode_Params params;
     MBPRC_RR prc;
 } CcaInstance;
@@ -98,12 +106,17 @@ typedef struct {
 static void cca_instance_init(CcaInstance *instance, size_t lambda, size_t message_bits)
 {
     instance->underlying = prc_ldpc(&ldpc_params);
-    instance->low_params = (PRCLow_Params){
-        .underlying = &instance->underlying,
-        .ell = 2 * lambda + message_bits,
-    };
+    instance->low_params = (PRCLow_Params){.underlying = &instance->underlying, .ell = lambda};
     instance->low = prc_low(&instance->low_params);
-    instance->params = (PRCReencode_Params){.inner = &instance->low, .lambda = lambda,
+    instance->ecc = hamming74_ecc();
+    instance->high_params = (PRCHigh_Params){
+        .inner = &instance->low,
+        .ecc = &instance->ecc,
+        .lambda = lambda,
+        .message_bits = 2 * lambda + message_bits,
+    };
+    instance->high = prc_high(&instance->high_params);
+    instance->params = (PRCReencode_Params){.inner = &instance->high, .lambda = lambda,
                                             .delta = 0.05};
     instance->prc = prc_cca_rr(&instance->params);
 }

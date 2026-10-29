@@ -1,6 +1,7 @@
 /*
  * PRC_sharp and PRC_cca: PRCs for messages of message_bits bits, built from an
- * inner multibit PRC (PRC_low) that encodes lambda + message_bits + lambda bits.
+ * inner multibit PRC (PRC_high in the demos and tests) that encodes
+ * lambda + message_bits + lambda bits.
  *
  * Encode(m): sample a seed r of lambda bits and derive pseudorandom bits
  * R2 || R1 from (r, m); encode the payload r || m || R2 with the inner PRC, using
