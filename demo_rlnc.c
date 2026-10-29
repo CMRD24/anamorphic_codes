@@ -19,11 +19,11 @@
 
 static const DemoParamSpec specs[] = {
     {"q", "256", "field size, a power of two up to 256"},
-    {"payload_bytes", "64", "payload bytes per symbol"},
-    {"generation_size", "16", "K: source packets per generation"},
-    {"lambda", "64", "security parameter in bits (label length a = lambda / log2 q, K >= 2a)"},
-    {"received_symbols", "20", "S >= K: symbols the anamorphic receiver collects"},
-    {"sent_symbols", "40", "T >= S: symbols the sender emits"},
+    {"payload_bytes", "1024", "payload bytes per symbol"},
+    {"generation_size", "32", "K: source packets per generation"},
+    {"lambda", "128", "security parameter in bits (label length a = lambda / log2 q, K >= 2a)"},
+    {"received_symbols", "33", "S >= K: symbols the anamorphic receiver collects"},
+    {"sent_symbols", "50", "T >= S: symbols the sender emits"},
     {NULL, NULL, NULL}
 };
 
