@@ -83,50 +83,50 @@ benchmark results on a Lenovo Laptop LOQ 15ARP9, x86-64 Linux Mint 22.2 (Zara) w
 
 == sharp  (100 keys x 100 rounds)
   operation                     mean [ms]         stddev            min       n
-  keygen (regular)             292.633010       3.167498     289.311263     100
-  keygen (anamorphic)            0.004417       0.000457       0.003577     100
-  encode                       116.521002       4.957858      99.482577   10000
-  aencode                      116.182814       4.951213      97.385156   10000
-  decode                       151.830669       5.051948     134.061615   10000
-  adecode                      152.201354       5.079560     133.257632   10000
-  encode + decode              268.351671       9.942160     233.544192   10000
-  aencode + adecode            268.384168       9.969531     230.642788   10000
+  keygen (regular)             195.661563       8.238031     189.125033     100
+  keygen (anamorphic)            0.003351       0.000531       0.002464     100
+  encode                        72.677050       3.648994      59.323296   10000
+  aencode                       72.586501       3.677718      58.521217   10000
+  decode                       106.321698       3.711987      92.253756   10000
+  adecode                      106.024914       3.796036      91.718692   10000
+  encode + decode              178.998748       7.304348     151.577052   10000
+  aencode + adecode            178.611415       7.415017     150.439740   10000
   anamorphic / regular:
-  encode                   x0.9971     (-0.338188 ms)
-  decode                   x1.0024     (+0.370685 ms)
-  encode + decode          x1.0001     (+0.032496 ms)
-  ciphertext: regular 1 x 4734976 bits, anamorphic 1 x 4734976 bits
+  encode                   x0.9988     (-0.090549 ms)
+  decode                   x0.9972     (-0.296784 ms)
+  encode + decode          x0.9978     (-0.387333 ms)
+  ciphertext: regular 1 x 2114176 bits, anamorphic 1 x 2114176 bits
 
 == cca  (100 keys x 100 rounds)
   operation                     mean [ms]         stddev            min       n
-  keygen (regular)             291.617284       1.352240     288.427282     100
-  keygen (anamorphic)            0.004414       0.000445       0.003347     100
-  encode                       116.077392       4.916970      98.026347   10000
-  aencode                      115.820946       4.959327      98.075566   10000
-  decode                       151.279233       5.022852     133.182819   10000
-  adecode                      151.740387       5.148773      34.303545   10000   (1 failed)
-  encode + decode              267.356624       9.867280     231.209166   10000
-  aencode + adecode            267.561333       9.957007     152.732624   10000
+  keygen (regular)             195.453497       3.419028     188.459686     100
+  keygen (anamorphic)            0.003377       0.000439       0.002315     100
+  encode                        72.590287       3.580986      59.008608   10000
+  aencode                       72.637652       3.632356      59.415044   10000
+  decode                       106.329880       3.715874      92.351665   10000
+  adecode                      106.117959       3.738276      92.107778   10000
+  encode + decode              178.920167       7.244600     151.360273   10000
+  aencode + adecode            178.755611       7.319858     151.522822   10000
   anamorphic / regular:
-  encode                   x0.9978     (-0.256446 ms)
-  decode                   x1.0030     (+0.461155 ms)
-  encode + decode          x1.0008     (+0.204709 ms)
-  ciphertext: regular 1 x 4734976 bits, anamorphic 1 x 4734976 bits
+  encode                   x1.0007     (+0.047365 ms)
+  decode                   x0.9980     (-0.211920 ms)
+  encode + decode          x0.9991     (-0.164556 ms)
+  ciphertext: regular 1 x 2114176 bits, anamorphic 1 x 2114176 bits
 
 == rlnc  (100 keys x 100 rounds)
   operation                     mean [ms]         stddev            min       n
-  keygen (anamorphic)            0.000024       0.000012       0.000020     100
-  encode                         0.051045       0.005190       0.047458   10000
-  aencode                        0.539745       0.013597       0.520533   10000
-  decode                         0.022277       0.001656       0.021350   10000
-  adecode                        0.932045       0.024655       0.911505   10000
-  encode + decode                0.073322       0.006170       0.069148   10000
-  aencode + adecode              1.471789       0.031618       1.438691   10000
+  keygen (anamorphic)            0.000025       0.000013       0.000020     100
+  encode                         1.058094       0.026550       1.045961   10000
+  aencode                        3.354426       0.029284       3.324363   10000
+  decode                         0.836168       0.023713       0.825137   10000
+  adecode                        5.685153       0.026310       5.646177   10000
+  encode + decode                1.894262       0.047253       1.874295   10000
+  aencode + adecode              9.039579       0.044230       8.979699   10000
   anamorphic / regular:
-  encode                   x10.5738    (+0.488699 ms)
-  decode                   x41.8394    (+0.909768 ms)
-  encode + decode          x20.0730    (+1.398467 ms)
-  ciphertext: regular 40 x 640 bits, anamorphic 40 x 640 bits
+  encode                   x3.1703     (+2.296331 ms)
+  decode                   x6.7991     (+4.848986 ms)
+  encode + decode          x4.7721     (+7.145317 ms)
+  ciphertext: regular 50 x 8448 bits, anamorphic 50 x 8448 bits
 
 == wiretap  (100 keys x 100 rounds)
   operation                     mean [ms]         stddev            min       n
