@@ -25,6 +25,7 @@ set(CMAKE_C_FLAGS_RELEASE "-O3")
 
 find_library(SODIUM_LIBRARY sodium REQUIRED)
 find_library(M_LIBRARY m REQUIRED)
+find_library(M4RI_LIBRARY m4ri REQUIRED)   # dense linear algebra over GF(2)
 find_package(OpenSSL)
 
 
@@ -49,6 +50,7 @@ target_include_directories(prc_utils PUBLIC
 
 target_link_libraries(prc_utils PUBLIC
     ${SODIUM_LIBRARY}
+    ${M4RI_LIBRARY}
     ${M_LIBRARY}
 )
 
@@ -66,9 +68,7 @@ target_link_libraries(prc_ldpc_impl PUBLIC prc_utils)
 
 # Anamorphism from randomness recovery (zero-bit and multibit)
 add_library(anamorphic_rr STATIC
-    prcs/anamorphism/azbprc_rr.c
-    prcs/anamorphism/ambprc_rr.c
-    prcs/anamorphism/rr_core.c
+    prcs/anamorphism/aprc_rr.c
 )
 target_link_libraries(anamorphic_rr PUBLIC prc_utils)
 
@@ -104,15 +104,11 @@ add_library(prc_high_impl STATIC
 )
 target_link_libraries(prc_high_impl PUBLIC prc_low_impl anamorphic_rr)
 
-add_library(prc_sharp_impl STATIC
-    prcs/multibit/implementations/prc_sharp.c
+# PRC_sharp and PRC_cca (re-encoding check)
+add_library(prc_reencode_impl STATIC
+    prcs/multibit/implementations/prc_reencode.c
 )
-target_link_libraries(prc_sharp_impl PUBLIC prc_low_impl anamorphic_rr)
-
-add_library(prc_cca_impl STATIC
-    prcs/multibit/implementations/prc_cca.c
-)
-target_link_libraries(prc_cca_impl PUBLIC prc_low_impl anamorphic_rr)
+target_link_libraries(prc_reencode_impl PUBLIC prc_low_impl anamorphic_rr)
 
 
 # ============================================================
@@ -149,7 +145,7 @@ add_library(demo_common STATIC
     demo_common.c
     demo_prc.c
 )
-target_link_libraries(demo_common PUBLIC anamorphic_rr)
+target_link_libraries(demo_common PUBLIC anamorphic_rr prc_ldpc_impl)
 
 function(add_demo name)
     add_executable(demo_${name} demo_${name}.c)
@@ -162,8 +158,8 @@ add_demo(dc prc_dc_impl)
 add_demo(1a prc1_adapt_impl)
 add_demo(low prc_low_impl)
 add_demo(high prc_high_impl)
-add_demo(sharp prc_sharp_impl)
-add_demo(cca prc_cca_impl)
+add_demo(sharp prc_reencode_impl)
+add_demo(cca prc_reencode_impl)
 add_demo(rlnc rlnc_impl)
 
 if(OpenSSL_FOUND)
@@ -195,7 +191,7 @@ add_executable(bench bench.c $<TARGET_OBJECTS:demo_ops>)
 target_link_libraries(bench PRIVATE
     demo_common
     prc_ldpc_impl prc_pp_impl prc1_adapt_impl prc_low_impl prc_high_impl
-    prc_sharp_impl prc_cca_impl rlnc_impl)
+    prc_reencode_impl rlnc_impl)
 if(OpenSSL_FOUND)
     target_link_libraries(bench PRIVATE wiretap_impl)
 else()

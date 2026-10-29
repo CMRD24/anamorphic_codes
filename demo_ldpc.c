@@ -1,4 +1,4 @@
-/* LDPC zero-bit PRC with the native anamorphic mode (second parity check matrix). */
+/* LDPC zero-bit PRC with the native anamorphic mode (second parity-check matrix P'). */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -7,7 +7,7 @@
 #include "utils/csprg_sodium.h"
 
 static const DemoParamSpec specs[] = {
-    DEMO_LDPC_SPECS("1024", "256", "512", "10", "0.01"),
+    DEMO_LDPC_SPECS_LARGE,
     {NULL, NULL, NULL}
 };
 
@@ -16,95 +16,115 @@ typedef struct {
     LDPCParams params;
     A_LDPCParams aparams;
     aZBPRC aprc;
-    APRC_Keys *akeys;
+    AZBPRC_Keys *akeys;
 } LdpcDemo;
 
 static void ldpc_close(void *handle)
 {
-    LdpcDemo *d = handle;
+    LdpcDemo *demo = handle;
 
-    if (d == NULL)
+    if (demo == NULL)
         return;
 
-    if (d->akeys != NULL) {
-        zbprc_free_enc_akey(&d->base.zb, &d->aprc, d->akeys->enc);
-        zbprc_free_dec_akey(&d->base.zb, &d->aprc, d->akeys->dec);
-        free(d->akeys);
+    zbprc_free_akeys(&demo->base.zerobit_prc, &demo->aprc, demo->akeys);
+    demo_prc_close(&demo->base);
+}
+
+/* the native anamorphic key (P', B) on top of the regular keys (P, G, z) of the handle */
+static int ldpc_akeygen(void *handle, const uint8_t key[DEMO_KEY_BYTES])
+{
+    LdpcDemo *demo = handle;
+
+    if (demo->base.zerobit_keys == NULL) {
+        fprintf(stderr, "the anamorphic key generation needs the regular key\n");
+        return -1;
     }
 
-    demo_prc_close(&d->base);
+    zbprc_free_akeys(&demo->base.zerobit_prc, &demo->aprc, demo->akeys);
+
+    RandomnessSource stream = demo_key_stream(key, DEMO_DOMAIN_ANAMORPHIC);
+
+    demo->akeys = zbprc_akeygen(&demo->base.zerobit_prc, &demo->aprc,
+                                demo->base.zerobit_keys, &stream);
+    csprg_randomness_free(&stream);
+
+    if (demo->akeys == NULL) {
+        fprintf(stderr, "anamorphic key generation failed (check the parameters)\n");
+        return -1;
+    }
+
+    return 0;
 }
 
 static void *ldpc_open(const DemoParams *params, const DemoKeys *keys)
 {
-    LdpcDemo *d = calloc(1, sizeof(*d));
+    LdpcDemo *demo = calloc(1, sizeof(*demo));
 
-    if (d == NULL)
+    if (demo == NULL)
         return NULL;
 
-    d->params = demo_ldpc_params(params);
-    d->aparams.g_prime = 0;
-    d->base.zerobit = 1;
-    d->base.zb = prc_ldpc(&d->params);
-    d->aprc = aprc_ldpc(&d->aparams);
-
-    if (demo_prc_finish(&d->base, keys) != 0) {
-        ldpc_close(d);
+    if (demo_ldpc_params(params, &demo->params, &demo->aparams) != 0) {
+        free(demo);
         return NULL;
     }
 
-    if (keys->have_anamorphic && d->base.zb_keys != NULL) {
-        RandomnessSource stream = demo_key_stream(keys->anamorphic, DEMO_DOMAIN_ANAMORPHIC);
+    demo->base.zerobit = 1;
+    demo->base.zerobit_prc = prc_ldpc(&demo->params);
+    demo->aprc = aprc_ldpc(&demo->aparams);
 
-        d->akeys = zbprc_akeygen(&d->base.zb, &d->aprc, d->base.zb_keys, &stream);
-        csprg_randomness_free(&stream);
-
-        if (d->akeys == NULL) {
-            fprintf(stderr, "anamorphic key generation failed (check the parameters)\n");
-            ldpc_close(d);
-            return NULL;
-        }
+    if (demo_prc_finish(&demo->base, keys) != 0) {
+        ldpc_close(demo);
+        return NULL;
     }
 
-    return d;
+    if (keys->have_anamorphic && demo->base.zerobit_keys != NULL &&
+        ldpc_akeygen(demo, keys->anamorphic) != 0) {
+        ldpc_close(demo);
+        return NULL;
+    }
+
+    return demo;
 }
 
 static int ldpc_aencode(void *handle, const char *message, const char *amessage,
                         DemoCiphertext *out)
 {
-    LdpcDemo *d = handle;
-    RandomnessSource rng = linux_randomness();
+    LdpcDemo *demo = handle;
+    RandomnessSource random = linux_randomness();
     size_t bits = 0;
-    uint8_t *c;
 
     /* zero-bit: the regular and the anamorphic message are the bit 1 */
     (void)message;
     (void)amessage;
 
-    c = zbprc_aencode(&d->base.zb, &d->aprc, d->base.zb_keys->enc, d->akeys->enc, &rng, &bits);
+    uint8_t *codeword = zbprc_aencode(&demo->base.zerobit_prc, &demo->aprc,
+                                      demo->base.zerobit_keys->enc, demo->akeys->double_key,
+                                      &random, &bits);
 
-    if (c == NULL || demo_ct_alloc(out, 1, bits) != 0) {
-        free(c);
+    if (codeword == NULL || demo_ct_alloc(out, 1, bits) != 0) {
+        free(codeword);
         fprintf(stderr, "anamorphic encoding failed\n");
         return -1;
     }
 
     for (size_t i = 0; i < (bits + 7) / 8; ++i)
-        out->data[0][i] = c[i];
+        out->data[0][i] = codeword[i];
 
-    free(c);
+    free(codeword);
 
     return 0;
 }
 
 static int ldpc_adecode(void *handle, const DemoCiphertext *in)
 {
-    LdpcDemo *d = handle;
+    LdpcDemo *demo = handle;
     int failed = 0;
 
     for (size_t i = 0; i < in->count; ++i) {
-        int accepted = zbprc_adecode(&d->base.zb, &d->aprc, d->base.zb_keys->dec,
-                                     d->akeys->dec, in->data[i], in->bits) == 1;
+        const int accepted = zbprc_adecode(&demo->base.zerobit_prc, &demo->aprc,
+                                           demo->base.zerobit_keys->dec,
+                                           demo->akeys->trapdoor_key, in->data[i],
+                                           in->bits) == 1;
 
         printf("codeword %zu: %s\n", i,
                accepted ? "anamorphic message present" : "no anamorphic message");
@@ -127,6 +147,8 @@ const DemoOps demo_ldpc_ops = {
     .decode = demo_prc_decode,
     .aencode = ldpc_aencode,
     .adecode = ldpc_adecode,
+    .akeygen = ldpc_akeygen,
+    .sample_messages = demo_prc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

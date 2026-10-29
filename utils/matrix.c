@@ -1,12 +1,29 @@
+/*
+ * Linear algebra over F_2 for the LDPC based PRCs.
+ *
+ * Representations (bit i of a vector is bit i mod 64 of word i / 64):
+ *   BitVector     a vector in F_2^bits.
+ *   ColumnMatrix  a dense matrix stored column by column, e.g. the generator
+ *                 matrix G of the LDPC PRC (n x g, columns in ker P).
+ *   SparseMatrix  a matrix with exactly t ones per row, stored as the column
+ *                 indices of the ones, e.g. the parity-check matrices P and P'.
+ *
+ * Addition in F_2 is XOR and multiplication is AND, so sums of vectors are XORs
+ * of whole words. The sparse products are computed here directly; the dense
+ * eliminations use the M4RI library (M. Albrecht, G. Bard, "The M4RI Library",
+ * https://github.com/malb/m4ri). M4RI stores rows as arrays of 64-bit words
+ * with the same bit order, so rows and BitVectors are copied word by word.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include <limits.h>
 #include <stdint.h>
 
+#include <m4ri/m4ri.h>
+
 #include "matrix.h"
+#include "random_utils.h"
 
 
 #define WORD_BITS 64
@@ -17,743 +34,322 @@ static size_t words_for_bits(size_t bits)
     return (bits + WORD_BITS - 1) / WORD_BITS;
 }
 
-
- SparseP sparse_p_alloc(size_t r,
-                              size_t n,
-                              size_t t)
+static void *checked_calloc(size_t count, size_t size)
 {
-    SparseP P;
+    void *p = calloc(count ? count : 1, size);
 
-    P.r = r;
-    P.n = n;
-    P.t = t;
-
-    P.positions =
-        malloc(r * t * sizeof(size_t));
-
-    if (P.positions == NULL &&
-        r * t != 0) {
-
-        fprintf(stderr,
-                "ZBPRC-LDPC: sparse P allocation failed.\n");
-
+    if (p == NULL) {
+        fprintf(stderr, "matrix: allocation failed.\n");
         exit(EXIT_FAILURE);
     }
 
-    return P;
+    return p;
+}
+
+/* clears the bits above v->bits in the last word */
+static void clear_padding(BitVector *v)
+{
+    if (v->bits % WORD_BITS != 0)
+        v->data[v->words - 1] &= (UINT64_C(1) << (v->bits % WORD_BITS)) - 1;
 }
 
 
- void sparse_p_free(SparseP *P)
+/* ------------------------------------------------------------------------
+ * Vectors
+ * ------------------------------------------------------------------------ */
+
+/* Allocates the zero vector of F_2^bits. Exits on allocation failure. */
+BitVector bitvector_alloc(size_t bits)
 {
-    if (P == NULL)
-        return;
+    BitVector v = {.bits = bits, .words = words_for_bits(bits)};
 
-    free(P->positions);
-
-    P->positions = NULL;
-    P->r = 0;
-    P->n = 0;
-    P->t = 0;
-}
-
-
- BitVector bitvector_alloc(size_t bits)
-{
-    BitVector v;
-
-    v.bits = bits;
-    v.words = words_for_bits(bits);
-    v.data = calloc(v.words, sizeof(uint64_t));
-
-    if (v.data == NULL && v.words != 0) {
-        fprintf(stderr,
-                "ZBPRC-LDPC: bit vector allocation failed.\n");
-        exit(EXIT_FAILURE);
-    }
+    v.data = checked_calloc(v.words, sizeof(uint64_t));
 
     return v;
 }
 
- PackedMatrix packed_matrix_alloc(size_t rows,
-                                         size_t cols)
-{
-    PackedMatrix M;
-
-    M.rows = rows;
-    M.cols = cols;
-    M.words = words_for_bits(cols);
-
-    M.data =
-        calloc(rows * M.words,
-               sizeof(uint64_t));
-
-    if (M.data == NULL &&
-        rows * M.words != 0) {
-
-        fprintf(stderr,
-                "ZBPRC-LDPC: packed matrix allocation failed.\n");
-
-        exit(EXIT_FAILURE);
-    }
-
-    return M;
-}
-
-
- void packed_matrix_free(PackedMatrix *M)
-{
-    free(M->data);
-
-    M->data = NULL;
-    M->rows = 0;
-    M->cols = 0;
-    M->words = 0;
-}
-
-
-static inline uint64_t *
-packed_matrix_row(const PackedMatrix *M,
-                  size_t row)
-{
-    return &M->data[row * M->words];
-}
-
-
-static inline const uint64_t *
-packed_matrix_const_row(const PackedMatrix *M,
-                        size_t row)
-{
-    return &M->data[row * M->words];
-}
-
-
-static inline uint8_t packed_matrix_get(
-    const PackedMatrix *M,
-    size_t row,
-    size_t col)
-{
-    const uint64_t *r =
-        packed_matrix_const_row(M, row);
-
-    return (uint8_t)(
-        (r[col >> 6] >>
-         (col & 63)) & 1ULL);
-}
-
-
-static inline void packed_matrix_set(
-    PackedMatrix *M,
-    size_t row,
-    size_t col)
-{
-    uint64_t *r =
-        packed_matrix_row(M, row);
-
-    r[col >> 6] |=
-        1ULL << (col & 63);
-}
-
-
-static inline void packed_row_xor(
-    uint64_t *dst,
-    const uint64_t *src,
-    size_t words)
-{
-    for (size_t i = 0;
-         i < words;
-         ++i) {
-
-        dst[i] ^= src[i];
-    }
-}
-
-
- PackedMatrix sparse_p_to_packed(
-    const SparseP *P)
-{
-    PackedMatrix M =
-        packed_matrix_alloc(P->r,
-                            P->n);
-
-    for (size_t row = 0;
-         row < P->r;
-         ++row) {
-
-        for (size_t j = 0;
-             j < P->t;
-             ++j) {
-
-            size_t col =
-                P->positions[
-                    row * P->t + j
-                ];
-
-            packed_matrix_set(&M,
-                              row,
-                              col);
-        }
-    }
-
-    return M;
-}
-
-
- void bitvector_free(BitVector *v)
+void bitvector_free(BitVector *v)
 {
     if (v == NULL)
         return;
 
     free(v->data);
-
-    v->data = NULL;
-    v->bits = 0;
-    v->words = 0;
+    *v = (BitVector){0};
 }
 
-
-uint8_t bit_get(const BitVector *v,
-                              size_t index)
+//value is 0 or 1
+void bitvector_set_bit(BitVector *v, size_t index, uint8_t value)
 {
-    return (uint8_t)(
-        (v->data[index >> 6] >>
-         (index & 63)) & 1ULL
-    );
-}
-
-
-void bit_set(BitVector *v,
-                           size_t index,
-                           uint8_t value)
-{
-    uint64_t mask =
-        1ULL << (index & 63);
+    const uint64_t mask = UINT64_C(1) << (index % WORD_BITS); //mask with 1 at position index % WORD_BITS
 
     if (value)
-        v->data[index >> 6] |= mask;
+        v->data[index / WORD_BITS] |= mask;
     else
-        v->data[index >> 6] &= ~mask;
+        v->data[index / WORD_BITS] &= ~mask;
 }
 
-
-void bitvector_zero(BitVector *v)
+static uint8_t bitvector_get_bit(const BitVector *v, size_t index)
 {
-    memset(v->data,
-           0,
-           v->words * sizeof(uint64_t));
+    return (uint8_t)((v->data[index / WORD_BITS] >> (index % WORD_BITS)) & 1);
 }
 
-
+/* Hamming weight wgt(v): the sum of the population counts of the words. */
 size_t bitvector_weight(const BitVector *v)
 {
-    size_t result = 0;
+    size_t weight = 0;
 
-    for (size_t i = 0;
-         i < v->words;
-         ++i) {
+    for (size_t i = 0; i < v->words; ++i)
+        weight += (size_t)__builtin_popcountll(v->data[i]);
 
-        result +=
-            (size_t)__builtin_popcountll(
-                v->data[i]);
-    }
+    return weight;
+}
 
-    /*
-     * Remove padding bits from the final word.
-     */
-    if (v->bits & 63) {
+void bitvector_add(BitVector *dst, const BitVector *src)
+{
+    for (size_t i = 0; i < dst->words; ++i)
+        dst->data[i] ^= src->data[i];
+}
 
-        size_t valid =
-            v->bits & 63;
+/* bytes holds (v->bits + 7) / 8 bytes; bits above v->bits in the last byte are ignored */
+void bitvector_from_bytes(BitVector *v, const uint8_t *bytes)
+{
+    memset(v->data, 0, v->words * sizeof(uint64_t)); //zero the data first
 
-        uint64_t mask =
-            (1ULL << valid) - 1ULL;
+    for (size_t i = 0; i < (v->bits + 7) / 8; ++i) // each i is a byte
+        v->data[i / 8] |= (uint64_t)bytes[i] << (8 * (i % 8)); //populate the word with bytes (right to left)
 
-        uint64_t invalid =
-            v->data[v->words - 1] & ~mask;
+    clear_padding(v);
+}
 
-        result -=
-            (size_t)__builtin_popcountll(
-                invalid);
-    }
+/* Returns (v->bits + 7) / 8 newly allocated bytes, NULL on allocation failure. */
+uint8_t *bitvector_to_bytes(const BitVector *v)
+{
+    const size_t byte_count = (v->bits + 7) / 8;
+    uint8_t *bytes = malloc(byte_count ? byte_count : 1);
 
-    return result;
+    if (bytes == NULL)
+        return NULL;
+
+    for (size_t i = 0; i < byte_count; ++i)
+        bytes[i] = (uint8_t)(v->data[i / 8] >> (8 * (i % 8))); // each word is 8 bytes (get from right to left by increasingly shifting to the right)
+
+    return bytes;
 }
 
 
-/*
- * ================================================================
- * Sparse P × vector
- * ================================================================
- */
+/* ------------------------------------------------------------------------
+ * Sparse matrices
+ * ------------------------------------------------------------------------ */
 
- void sparse_p_mul(const SparseP *P,
-                         const BitVector *x,
-                         BitVector *y)
+/* Allocates the position array (zero; fill it with sparse_matrix_sample). */
+SparseMatrix sparse_matrix_alloc(size_t rows, size_t cols, size_t row_weight)
 {
-    bitvector_zero(y);
+    SparseMatrix M = {.rows = rows, .cols = cols, .row_weight = row_weight};
 
-    for (size_t row = 0;
-         row < P->r;
-         ++row) {
+    M.positions = checked_calloc(rows * row_weight, sizeof(size_t));
 
+    return M;
+}
+
+void sparse_matrix_free(SparseMatrix *M)
+{
+    if (M == NULL)
+        return;
+
+    free(M->positions);
+    *M = (SparseMatrix){0};
+}
+
+/*
+ * Every row independently: row_weight distinct column positions, drawn uniformly
+ * by rejecting repeats (must be done to insure the vector to actually have the right row-weight), i.e. a uniform vector of weight row_weight.
+ */
+void sparse_matrix_sample(SparseMatrix *M, RandomnessSource *random)
+{
+    for (size_t row = 0; row < M->rows; ++row) {
+        size_t *positions = M->positions + row * M->row_weight;
+        size_t placed = 0;
+
+        while (placed < M->row_weight) {
+            const size_t col = random_bounded(random, M->cols);
+            int repeated = 0;
+
+            for (size_t j = 0; j < placed && !repeated; ++j)
+                repeated = positions[j] == col;
+
+            if (!repeated)
+                positions[placed++] = col;
+        }
+    }
+}
+
+/*
+ * y = M x: y_i is the parity (XOR) of the row_weight bits of x selected by row i.
+ * Cost O(rows * row_weight) instead of O(rows * cols).
+ */
+void sparse_matrix_mul_vector(const SparseMatrix *M, const BitVector *x, BitVector *y)
+{
+    memset(y->data, 0, y->words * sizeof(uint64_t)); //zero y
+
+    for (size_t row = 0; row < M->rows; ++row) {
+        const size_t *positions = M->positions + row * M->row_weight;
         uint8_t parity = 0;
 
-        size_t base =
-            row * P->t;
+        for (size_t j = 0; j < M->row_weight; ++j)
+            parity ^= bitvector_get_bit(x, positions[j]);
 
-        for (size_t j = 0;
-             j < P->t;
-             ++j) {
-
-            size_t col =
-                P->positions[base + j];
-
-            parity ^=
-                bit_get(x, col);
-        }
-
-        if (parity)
-            bit_set(y, row, 1);
+        bitvector_set_bit(y, row, parity);
     }
 }
 
+
+/* ------------------------------------------------------------------------
+ * Column matrices
+ * ------------------------------------------------------------------------ */
+
+/* Allocates the zero rows x cols matrix. Exits on allocation failure. */
+ColumnMatrix column_matrix_alloc(size_t rows, size_t cols)
+{
+    ColumnMatrix M = {.rows = rows, .cols = cols};
+
+    M.columns = checked_calloc(cols, sizeof(BitVector));
+
+    for (size_t j = 0; j < cols; ++j)
+        M.columns[j] = bitvector_alloc(rows);
+
+    return M;
+}
+
+void column_matrix_free(ColumnMatrix *M)
+{
+    if (M == NULL)
+        return;
+
+    for (size_t j = 0; M->columns != NULL && j < M->cols; ++j)
+        bitvector_free(&M->columns[j]);
+
+    free(M->columns);
+    *M = (ColumnMatrix){0};
+}
+
+/* y = M x: the XOR of the columns j with x_j = 1. */
+void column_matrix_mul_vector(const ColumnMatrix *M, const BitVector *x, BitVector *y)
+{
+    memset(y->data, 0, y->words * sizeof(uint64_t));// zero y
+
+    for (size_t j = 0; j < M->cols; ++j) {
+        if (bitvector_get_bit(x, j))
+            bitvector_add(y, &M->columns[j]);
+    }
+}
+
+/* P M, computed column by column: (P M)[:, j] = P M[:, j]. */
+ColumnMatrix sparse_matrix_mul_column_matrix(const SparseMatrix *P, const ColumnMatrix *M)
+{
+    ColumnMatrix product = column_matrix_alloc(P->rows, M->cols);
+
+    for (size_t j = 0; j < M->cols; j++)
+        sparse_matrix_mul_vector(P, &M->columns[j], &product.columns[j]);
+
+    return product;
+}
 
 /*
- * ================================================================
- * Packed matrix
- * ================================================================
+ * ker M via M4RI: the PLUQ decomposition of M gives the M.cols x (M.cols - rank)
+ * matrix X with M X = 0 and independent columns (rank-nullity), which is the
+ * basis. M4RI works on rows, so M is built from its transpose (whose rows are the
+ * columns of M) and X is read through its transpose.
  */
-
-
- PackedMatrix
-concat_g_matrices(
-    const PackedG *G,
-    const PackedG *Gprime)
+//m4ri documentation: https://malb.bitbucket.io/m4ri/mzd_8h.html
+ColumnMatrix column_matrix_kernel(const ColumnMatrix *M)
 {
-    if (G->n != Gprime->n)
-        abort();
+    mzd_t *Mt = mzd_init((rci_t)M->cols, (rci_t)M->rows); //transposed init
 
-    PackedMatrix M =
-        packed_matrix_alloc(
-            G->n,
-            G->g + Gprime->g
-        );
+    for (size_t j = 0; j < M->cols; ++j)
+        memcpy(mzd_row(Mt, (rci_t)j), M->columns[j].data, M->columns[j].words * sizeof(uint64_t)); //populate rows of transposed matrix with columns
 
-    for (size_t row = 0;
-         row < G->n;
-         ++row) {
+    mzd_t *A = mzd_transpose(NULL, Mt); //A = (M^T)^T = M
+    mzd_t *X = mzd_kernel_left_pluq(A, 0);       /* NULL: trivial kernel */ //Solve X for A X = 0. https://malb.bitbucket.io/m4ri/solve_8h.html#a57eade59ba43ad425d09c2336205d82b => X is the kernel of M
+    ColumnMatrix basis = column_matrix_alloc(M->cols, X != NULL ? (size_t)X->ncols : 0); //initialize X as ColumnMatrix
 
-        for (size_t col = 0;
-             col < G->g;
-             ++col) {
+    if (X != NULL) {
+        mzd_t *Xt = mzd_transpose(NULL, X);
 
-            if (bit_get(&G->columns[col], row))
-                packed_matrix_set(&M, row, col);
+        for (size_t j = 0; j < basis.cols; ++j) {
+            memcpy(basis.columns[j].data, mzd_row(Xt, (rci_t)j),
+                   basis.columns[j].words * sizeof(uint64_t)); //copy rows from Xt into columns of basis
+            clear_padding(&basis.columns[j]);
         }
 
-        for (size_t col = 0;
-             col < Gprime->g;
-             ++col) {
-
-            if (bit_get(&Gprime->columns[col], row))
-
-                packed_matrix_set(
-                    &M,
-                    row,
-                    G->g + col
-                );
-        }
+        mzd_free(Xt);
+        mzd_free(X);
     }
 
-    return M;
+    mzd_free(A);
+    mzd_free(Mt);
+
+    return basis;
 }
 
-
- void kernel_basis_free(KernelBasis *K)
+/*
+ * Uniform elements of ker P without a basis of ker P (which would be a dense
+ * (n - r) x n matrix). Gauss-Jordan elimination (M4RI) brings P to reduced row
+ * echelon form R with the same kernel: row i of R has a 1 in its pivot column p_i
+ * and 0 in the other pivot columns. Hence x is in ker P iff
+ *     x_{p_i} = sum of the free coordinates x_j (j not a pivot) with R_ij = 1
+ * for every row i. Each column is therefore sampled by drawing the free
+ * coordinates uniformly and solving for the pivot coordinates; this is a bijection
+ * between F_2^(n - rank) and ker P, so the columns are uniform and independent.
+ */
+ColumnMatrix sparse_matrix_sample_kernel(const SparseMatrix *P, size_t count,
+                                         RandomnessSource *random)
 {
-    if (K == NULL)
-        return;
+    ColumnMatrix samples = column_matrix_alloc(P->cols, count);
+    mzd_t *R = mzd_init((rci_t)P->rows, (rci_t)P->cols);
 
-    if (K->vectors != NULL) {
-
-        for (size_t i = 0;
-             i < K->dimension;
-             ++i) {
-
-            bitvector_free(
-                &K->vectors[i]);
-        }
-
-        free(K->vectors);
+    // transform SparseMatrix to mzd_t by writing each bit
+    for (size_t row = 0; row < P->rows; ++row) {
+        for (size_t j = 0; j < P->row_weight; ++j)
+            mzd_write_bit(R, (rci_t)row, (rci_t)P->positions[row * P->row_weight + j], 1);
     }
 
-    K->vectors = NULL;
-    K->dimension = 0;
+    const size_t rank = (size_t)mzd_echelonize_m4ri(R, 1, 0); //https://malb.bitbucket.io/m4ri/echelonform_8h.html#a1b261150883fb32d5e82f2b42eae96ab: sets the reduced row echelon form of R in place, returns the rank of R
+    size_t *pivots = checked_calloc(rank, sizeof(size_t));
+
+    //find all pivots (these can't be chosen freely)
+    for (size_t i = 0; i < rank; ++i) {
+        const word *row = mzd_row(R, (rci_t)i);
+        size_t w = 0;
+
+        while (row[w] == 0)
+            ++w;
+
+        pivots[i] = w * WORD_BITS + (size_t)__builtin_ctzll(row[w]); //__builtin_ctzll Returns the number of trailing 0-bits in x, starting at the least significant bit position (https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html)
+    }
+
+    for (size_t j = 0; j < count; ++j) {
+        BitVector *x = &samples.columns[j]; //j-th column of the result
+
+        random_bitvector(random, x); //initially, choose completely at random
+
+        for (size_t i = 0; i < rank; ++i)
+            bitvector_set_bit(x, pivots[i], 0); //then, set the bits at the pivot postions to 0:
+
+        /* the pivot coordinates do not enter any row's sum (because they are set to 0), so the order does not matter */
+        for (size_t i = 0; i < rank; ++i) {
+            const word *row = mzd_row(R, (rci_t)i);
+            uint64_t parity = 0;
+
+            //calculate the echelon row * the random column vector (with zeroed pivots) to determine what the pivot position in the column vector should be (this insures that row*column=0 for all i rows)
+            for (size_t w = 0; w < x->words; ++w)
+                parity ^= row[w] & x->data[w];
+
+            bitvector_set_bit(x, pivots[i], (uint8_t)(__builtin_popcountll(parity) & 1)); //__builtin_popcountll Returns the number of 1-bits in parity. If uneven, set to 1, otherwise to 0 (so row*column=0 in characteristic 2)
+        }
+    }
+
+    free(pivots);
+    mzd_free(R);
+
+    return samples;
 }
-
-
- KernelBasis kernel_basis(const PackedMatrix *A)
-{
-
-
-    size_t *pivot_column =
-        malloc(A->rows * sizeof(size_t));
-
-    if (pivot_column == NULL &&
-        A->rows != 0) {
-
-        fprintf(stderr,
-                "ZBPRC-LDPC: allocation failed.\n");
-
-        exit(EXIT_FAILURE);
-    }
-
-    size_t rank = 0;
-
-    /*
-     * Gauss-Jordan elimination over F_2.
-     */
-    for (size_t col = 0;
-         col < A->cols && rank < A->rows;
-         ++col) {
-
-        size_t pivot = SIZE_MAX;
-
-        for (size_t row = rank;
-             row < A->rows;
-             ++row) {
-
-            if (packed_matrix_get(A,
-                                  row,
-                                  col)) {
-
-                pivot = row;
-                break;
-            }
-        }
-
-        if (pivot == SIZE_MAX)
-            continue;
-
-        if (pivot != rank) {
-
-            uint64_t *a =
-                packed_matrix_row(A,
-                                  rank);
-
-            uint64_t *b =
-                packed_matrix_row(A,
-                                  pivot);
-
-            for (size_t w = 0;
-                 w < A->words;
-                 ++w) {
-
-                uint64_t tmp = a[w];
-                a[w] = b[w];
-                b[w] = tmp;
-            }
-        }
-
-        pivot_column[rank] = col;
-
-        const uint64_t *pivot_row =
-            packed_matrix_const_row(
-                A,
-                rank);
-
-        for (size_t row = 0;
-             row < A->rows;
-             ++row) {
-
-            if (row == rank)
-                continue;
-
-            if (packed_matrix_get(A,
-                                  row,
-                                  col)) {
-
-                uint64_t *current =
-                    packed_matrix_row(
-                        A,
-                        row);
-
-                packed_row_xor(
-                    current,
-                    pivot_row,
-                    A->words);
-            }
-        }
-
-        ++rank;
-    }
-
-    size_t dimension =
-        A->cols - rank;
-
-    KernelBasis K;
-
-    K.dimension = dimension;
-
-    K.vectors =
-        calloc(dimension,
-               sizeof(BitVector));
-
-    if (K.vectors == NULL &&
-        dimension != 0) {
-
-        fprintf(stderr,
-                "ZBPRC-LDPC: allocation failed.\n");
-
-        exit(EXIT_FAILURE);
-    }
-
-    uint8_t *is_pivot =
-        calloc(A->cols, sizeof(uint8_t));
-
-    if (is_pivot == NULL &&
-        A->cols != 0) {
-
-        fprintf(stderr,
-                "ZBPRC-LDPC: allocation failed.\n");
-
-        exit(EXIT_FAILURE);
-    }
-
-    for (size_t i = 0;
-         i < rank;
-         ++i) {
-
-        is_pivot[pivot_column[i]] = 1;
-    }
-
-    size_t kernel_index = 0;
-
-    for (size_t free_col = 0;
-         free_col < A->cols;
-         ++free_col) {
-
-        if (is_pivot[free_col])
-            continue;
-
-        BitVector v =
-            bitvector_alloc(A->cols);
-
-        bit_set(&v,
-                free_col,
-                1);
-
-        for (size_t row = 0;
-             row < rank;
-             ++row) {
-
-            size_t pivot =
-                pivot_column[row];
-
-            if (packed_matrix_get(
-                    A,
-                    row,
-                    free_col)) {
-
-                bit_set(&v,
-                        pivot,
-                        1);
-            }
-        }
-
-        K.vectors[kernel_index++] =
-            v;
-    }
-
-    free(is_pivot);
-    free(pivot_column);
-
-    //packed_matrix_free(A);
-
-    return K;
-}
-
-
- PackedG packed_g_alloc(size_t n,
-                              size_t g)
-{
-    PackedG G;
-
-    G.n = n;
-    G.g = g;
-
-    G.columns =
-        calloc(g,
-               sizeof(BitVector));
-
-    if (G.columns == NULL &&
-        g != 0) {
-
-        fprintf(stderr,
-                "ZBPRC-LDPC: G allocation failed.\n");
-
-        exit(EXIT_FAILURE);
-    }
-
-    for (size_t j = 0;
-         j < g;
-         ++j) {
-
-        G.columns[j] =
-            bitvector_alloc(n);
-    }
-
-    return G;
-}
-
-
- void packed_g_free(PackedG *G)
-{
-    if (G == NULL)
-        return;
-
-    for (size_t j = 0;
-         j < G->g;
-         ++j) {
-
-        bitvector_free(
-            &G->columns[j]);
-    }
-
-    free(G->columns);
-
-    G->columns = NULL;
-    G->n = 0;
-    G->g = 0;
-}
-
- PackedG
-kernel_basis_to_packed_g(
-    const KernelBasis *K,
-    size_t n)
-{
-    if (K == NULL)
-        abort();
-
-    PackedG G =
-        packed_g_alloc(
-            n,
-            K->dimension
-        );
-
-    size_t words =
-        (n + 63) / 64;
-
-    for (size_t j = 0;
-         j < K->dimension;
-         ++j) {
-
-        if (K->vectors[j].bits < n) {
-            packed_g_free(&G);
-            abort();
-        }
-
-        memcpy(
-            G.columns[j].data,
-            K->vectors[j].data,
-            words * sizeof(uint64_t)
-        );
-
-        /*
-         * Clear unused bits in the last word.
-         */
-        if (n % 64 != 0) {
-            G.columns[j].data[words - 1] &=
-                ((UINT64_C(1) << (n % 64)) - 1);
-        }
-    }
-
-    return G;
-}
-
-
- void packed_g_mul(
-    const PackedG *G,
-    const BitVector *s,
-    BitVector *result)
-{
-    bitvector_zero(result);
-
-    for (size_t j = 0;
-         j < G->g;
-         ++j) {
-
-        if (bit_get(s, j)) {
-
-            for (size_t w = 0;
-                 w < result->words;
-                 ++w) {
-
-                result->data[w] ^=
-                    G->columns[j].data[w];
-            }
-        }
-    }
-}
-
-
- PackedMatrix
-packed_g_to_matrix(const PackedG *G)
-{
-    if (G == NULL)
-        return (PackedMatrix){0};
-
-    PackedMatrix M =
-        packed_matrix_alloc(G->n, G->g);
-
-    for (size_t col = 0;
-         col < G->g;
-         ++col) {
-
-        for (size_t row = 0;
-             row < G->n;
-             ++row) {
-
-            if (bit_get(&G->columns[col], row)) {
-
-                packed_matrix_set(
-                    &M,
-                    row,
-                    col);
-            }
-        }
-    }
-
-    return M;
-}
-
-PackedG
-sparse_p_mul_packed_g(
-    const SparseP *P,
-    const PackedG *G)
-{
-    if (P == NULL || G == NULL)
-        return (PackedG){0};
-
-    /* P is r × n, G is n × g */
-    if (P->n != G->n)
-        return (PackedG){0};
-
-    PackedG result = packed_g_alloc(P->r, G->g);
-
-    for (size_t j = 0; j < G->g; j++) {
-        /*
-         * G->columns[j] is the j-th column of G,
-         * so compute:
-         *
-         * result[:, j] = P * G[:, j]
-         */
-        sparse_p_mul(
-            P,
-            &G->columns[j],
-            &result.columns[j]);
-    }
-
-    return result;
-}
-

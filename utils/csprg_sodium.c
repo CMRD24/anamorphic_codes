@@ -1,204 +1,111 @@
+/*
+ * Deterministic pseudorandom generator from a seed.
+ *
+ * The seed (any length) is compressed to a 256-bit key with BLAKE2b and a domain
+ * separation prefix; the output is the ChaCha20 keystream under that key
+ * (libsodium crypto_stream_chacha20 with a 64-bit block counter). ChaCha20 is a stream
+ * cipher, so the stream is indistinguishable from random to anyone who does not
+ * know the seed. It is used to derive reproducible keys and the pseudorandom
+ * coins of the PRC constructions; the output is a continuous byte stream, i.e.
+ * it does not depend on how the requests are split.
+ */
+
 #include <sodium.h>
 #include <stdint.h>
-#include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include "random.h"
+#include "csprg_sodium.h"
 
-#define PRNG_BLOCK_BYTES 64
+#define BLOCK_BYTES 64           /* ChaCha20 block */
+#define CHUNK_BYTES 4096         /* whole blocks generated at once */
 
 typedef struct {
-    uint8_t *seed;
-    size_t seed_bits;
-    uint64_t counter;
-} SecurePseudorandomCtx;
+    uint8_t key[crypto_stream_chacha20_KEYBYTES];
+    uint64_t position;           /* bytes of the stream already returned */
+    uint8_t block[BLOCK_BYTES];  /* the block containing `position` ... */
+    uint64_t block_index;        /* ... if block_valid */
+    int block_valid;
+} StreamCtx;
 
+static const uint8_t nonce[crypto_stream_chacha20_NONCEBYTES];   /* zero: one key per stream */
 
-/*
- * Generate one deterministic block from:
- *
- *     seed || counter
- */
-static int
-generate_block(
-    const uint8_t *seed,
-    size_t seed_bits,
-    uint64_t counter,
-    uint8_t *out)
+/* the keystream bytes [position, position + len) */
+//similar implementation to random_linux
+static int stream_read(void *vctx, uint8_t *out, size_t len)
 {
-    /*
-     * Include the counter in the input.
-     */
-    uint8_t counter_bytes[8];
+    StreamCtx *ctx = vctx;
 
-    for (size_t i = 0; i < 8; ++i)
-        counter_bytes[i] =
-            (uint8_t)(counter >> (8 * i));
-
-    /*
-     * Hash:
-     *
-     *     domain || seed_bits || seed || counter
-     *
-     * using BLAKE2b-512.
-     */
-    crypto_generichash_state state;
-
-    if (crypto_generichash_init(
-            &state,
-            NULL,
-            0,
-            PRNG_BLOCK_BYTES) != 0)
-        return -1;
-
-    static const uint8_t domain[] =
-        "CSPRG-SODIUM-STREAM";
-
-    if (crypto_generichash_update(
-            &state,
-            domain,
-            sizeof(domain) - 1) != 0)
-        return -1;
-
-    uint64_t bits = (uint64_t)seed_bits;
-    uint8_t bits_bytes[8];
-
-    for (size_t i = 0; i < 8; ++i)
-        bits_bytes[i] =
-            (uint8_t)(bits >> (8 * i));
-
-    if (crypto_generichash_update(
-            &state,
-            bits_bytes,
-            sizeof(bits_bytes)) != 0)
-        return -1;
-
-    /*
-     * Seed is byte-packed, so only complete bytes
-     * are passed here.
-     */
-    size_t seed_len =
-        (seed_bits + 7) / 8;
-
-    if (seed_len > 0) {
-
-        if (crypto_generichash_update(
-                &state,
-                seed,
-                seed_len) != 0)
-            return -1;
-    }
-
-    if (crypto_generichash_update(
-            &state,
-            counter_bytes,
-            sizeof(counter_bytes)) != 0)
-        return -1;
-
-    return crypto_generichash_final(
-        &state,
-        out,
-        PRNG_BLOCK_BYTES
-    );
-}
-
-
-int
-secure_pseudorandom(
-    void *ctx,
-    uint8_t *out,
-    size_t len)
-{
-    SecurePseudorandomCtx *prng =
-        (SecurePseudorandomCtx *)ctx;
-
-    if (prng == NULL)
-        return 0;
-
-    if (len > 0 && out == NULL)
+    if (ctx == NULL || (len > 0 && out == NULL))
         return 0;
 
     while (len > 0) {
+        const uint64_t index = ctx->position / BLOCK_BYTES;
+        const size_t offset = (size_t)(ctx->position % BLOCK_BYTES);
+        size_t take;
 
-        uint8_t block[PRNG_BLOCK_BYTES];
+        if (offset == 0 && len >= BLOCK_BYTES) {
+            /* whole blocks directly into the output */
+            take = len - len % BLOCK_BYTES;
+            if (take > CHUNK_BYTES)
+                take = CHUNK_BYTES;
 
-        if (generate_block(
-                prng->seed,
-                prng->seed_bits,
-                prng->counter,
-                block) != 0)
-            return 0;
+            memset(out, 0, take);
+            //https://libsodium.gitbook.io/doc/advanced/stream_ciphers/chacha20
+            crypto_stream_chacha20_xor_ic(out, out, take, nonce, index, ctx->key);
+        } else {
+            /* a partial block: kept, so consecutive small reads generate it once */
+            take = BLOCK_BYTES - offset;
+            if (take > len)
+                take = len;
 
-        size_t take = len;
+            if (!ctx->block_valid || ctx->block_index != index) { //must generate new block
+                memset(ctx->block, 0, sizeof(ctx->block));
+                crypto_stream_chacha20_xor_ic(ctx->block, ctx->block, sizeof(ctx->block),
+                                              nonce, index, ctx->key);
+                ctx->block_index = index;
+                ctx->block_valid = 1;
+            }
 
-        if (take > PRNG_BLOCK_BYTES)
-            take = PRNG_BLOCK_BYTES;
-
-        memcpy(out, block, take);
+            memcpy(out, ctx->block + offset, take);
+        }
 
         out += take;
         len -= take;
-
-        prng->counter++;
+        ctx->position += take;
     }
 
     return 1;
 }
 
-void
-csprg_randomness_free(
-    RandomnessSource *random)
+void csprg_randomness_free(RandomnessSource *random)
 {
     if (random == NULL || random->ctx == NULL)
         return;
 
-    SecurePseudorandomCtx *ctx =
-        random->ctx;
-
-    free(ctx->seed);
-    free(ctx);
+    sodium_memzero(random->ctx, sizeof(StreamCtx));
+    free(random->ctx);
 
     random->ctx = NULL;
     random->rng = NULL;
 }
 
-
-RandomnessSource
-csprg_randomness(
-    const uint8_t *seed,
-    size_t seed_length)
+RandomnessSource csprg_randomness(const uint8_t *seed, size_t seed_length)
 {
-    SecurePseudorandomCtx *ctx =
-        malloc(sizeof(*ctx));
+    static const uint8_t domain[] = "CSPRG-CHACHA20";
+    crypto_generichash_state state;
+    StreamCtx *ctx = calloc(1, sizeof(*ctx));
 
-    if (ctx == NULL)
-        return (RandomnessSource) {
-            .ctx = NULL,
-            .rng = NULL
-        };
-
-    ctx->seed = malloc(seed_length);
-
-    if (seed_length > 0 && ctx->seed == NULL) {
+    if (ctx == NULL || sodium_init() < 0) {
         free(ctx);
-        return (RandomnessSource) {
-            .ctx = NULL,
-            .rng = NULL
-        };
+        return (RandomnessSource){.ctx = NULL, .rng = NULL};
     }
 
-    memcpy(
-        ctx->seed,
-        seed,
-        seed_length
-    );
+    /* key = BLAKE2b-256(domain || seed) */
+    crypto_generichash_init(&state, NULL, 0, sizeof(ctx->key));
+    crypto_generichash_update(&state, domain, sizeof(domain) - 1);//don't use the zero-terminator of the string as domain part (that is why -1)
+    crypto_generichash_update(&state, seed, seed_length);
+    crypto_generichash_final(&state, ctx->key, sizeof(ctx->key));
 
-    ctx->seed_bits = seed_length * 8;
-    ctx->counter = 0;
-
-    return (RandomnessSource) {
-        .ctx = ctx,
-        .rng = secure_pseudorandom
-    };
+    return (RandomnessSource){.ctx = ctx, .rng = stream_read};
 }
-

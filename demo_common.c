@@ -27,96 +27,103 @@ static int spec_index(const DemoParamSpec *specs, const char *name)
     return -1;
 }
 
-void demo_params_defaults(DemoParams *p, const DemoParamSpec *specs)
+void demo_params_defaults(DemoParams *params, const DemoParamSpec *specs)
 {
-    memset(p, 0, sizeof(*p));
-    p->specs = specs;
+    memset(params, 0, sizeof(*params));
+    params->specs = specs;
 
     for (size_t i = 0; specs[i].name != NULL; ++i) {
-        strncpy(p->values[i], specs[i].default_value, sizeof(p->values[i]) - 1);
+        strncpy(params->values[i], specs[i].default_value, sizeof(params->values[i]) - 1);
     }
 }
 
-int demo_params_set(DemoParams *p, const char *name, const char *value)
+int demo_params_set(DemoParams *params, const char *name, const char *value)
 {
-    int i = spec_index(p->specs, name);
+    int i = spec_index(params->specs, name);
 
     if (i < 0) {
         fprintf(stderr, "unknown parameter '%s'\n", name);
         return -1;
     }
 
-    if (strlen(value) >= sizeof(p->values[i])) {
+    if (strlen(value) >= sizeof(params->values[i])) {
         fprintf(stderr, "value of '%s' is too long\n", name);
         return -1;
     }
 
-    strcpy(p->values[i], value);
+    strcpy(params->values[i], value);
 
     return 0;
 }
 
-const char *demo_param(const DemoParams *p, const char *name)
+const char *demo_param(const DemoParams *params, const char *name)
 {
-    int i = spec_index(p->specs, name);
+    int i = spec_index(params->specs, name);
 
-    return i < 0 ? "" : p->values[i];
+    return i < 0 ? "" : params->values[i];
 }
 
-size_t demo_param_size(const DemoParams *p, const char *name)
+size_t demo_param_size(const DemoParams *params, const char *name)
 {
-    return (size_t)strtoull(demo_param(p, name), NULL, 10);
+    return (size_t)strtoull(demo_param(params, name), NULL, 10);
 }
 
-double demo_param_double(const DemoParams *p, const char *name)
+/* a decimal number or a fraction "a/b" */
+double demo_param_double(const DemoParams *params, const char *name)
 {
-    return strtod(demo_param(p, name), NULL);
+    char *end;
+    const double value = strtod(demo_param(params, name), &end);
+
+    if (*end == '/')
+        return value / strtod(end + 1, NULL);
+
+    return value;
 }
 
-static int params_save(const DemoParams *p, const char *path)
+static int params_save(const DemoParams *params, const char *path)
 {
-    FILE *f = fopen(path, "w");
+    FILE *file = fopen(path, "w");
 
-    if (f == NULL) {
+    if (file == NULL) {
         perror(path);
         return -1;
     }
 
-    for (size_t i = 0; p->specs[i].name != NULL; ++i)
-        fprintf(f, "%s=%s\n", p->specs[i].name, p->values[i]);
+    for (size_t i = 0; params->specs[i].name != NULL; ++i)
+        fprintf(file, "%s=%s\n", params->specs[i].name, params->values[i]);
 
-    fclose(f);
+    fclose(file);
 
     return 0;
 }
 
 /* a missing file means "all defaults" */
-static int params_load(DemoParams *p, const DemoParamSpec *specs, const char *path)
+static int params_load(DemoParams *params, const DemoParamSpec *specs, const char *path)
 {
     char line[256];
-    FILE *f;
+    FILE *file;
 
-    demo_params_defaults(p, specs);
+    demo_params_defaults(params, specs);
 
-    f = fopen(path, "r");
-    if (f == NULL)
+    file = fopen(path, "r");
+    if (file == NULL)
         return 0;
 
-    while (fgets(line, sizeof(line), f) != NULL) {
-        char *eq = strchr(line, '=');
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *equals = strchr(line, '=');
 
-        if (eq == NULL)
+        if (equals == NULL)
             continue;
 
-        *eq = '\0';
-        eq[1 + strcspn(eq + 1, "\r\n")] = '\0';
+        *equals = '\0';
+        equals[1 + strcspn(equals + 1, "\r\n")] = '\0';
 
         /* parameters unknown to this version are ignored */
         if (spec_index(specs, line) >= 0)
-            demo_params_set(p, line, eq + 1);
+            demo_params_set(params, line, equals + 1);
     }
 
-    fclose(f);
+    fclose(file);
 
     return 0;
 }
@@ -158,19 +165,19 @@ static int hex_value(int c)
 /* parses exactly len bytes of hex, ignoring surrounding whitespace */
 static int from_hex(const char *in, uint8_t *out, size_t len)
 {
-    size_t n = 0;
+    size_t count = 0;
 
     while (isspace((unsigned char)*in))
         ++in;
 
-    for (; n < len; ++n) {
-        int hi = hex_value(in[2 * n]);
-        int lo = hi < 0 ? -1 : hex_value(in[2 * n + 1]);
+    for (; count < len; ++count) {
+        int high = hex_value(in[2 * count]);
+        int low = high < 0 ? -1 : hex_value(in[2 * count + 1]);
 
-        if (hi < 0 || lo < 0)
+        if (high < 0 || low < 0)
             return -1;
 
-        out[n] = (uint8_t)(hi << 4 | lo);
+        out[count] = (uint8_t)(high << 4 | low);
     }
 
     in += 2 * len;
@@ -183,16 +190,16 @@ static int from_hex(const char *in, uint8_t *out, size_t len)
 static int key_write(const char *path, const uint8_t key[DEMO_KEY_BYTES])
 {
     char hex[2 * DEMO_KEY_BYTES + 1];
-    FILE *f = fopen(path, "w");
+    FILE *file = fopen(path, "w");
 
-    if (f == NULL) {
+    if (file == NULL) {
         perror(path);
         return -1;
     }
 
     to_hex(key, DEMO_KEY_BYTES, hex);
-    fprintf(f, "%s\n", hex);
-    fclose(f);
+    fprintf(file, "%s\n", hex);
+    fclose(file);
 
     return 0;
 }
@@ -201,17 +208,17 @@ static int key_write(const char *path, const uint8_t key[DEMO_KEY_BYTES])
 static int key_read(const char *path, uint8_t key[DEMO_KEY_BYTES])
 {
     char hex[2 * DEMO_KEY_BYTES + 8] = {0};
-    FILE *f = fopen(path, "r");
+    FILE *file = fopen(path, "r");
 
-    if (f == NULL)
+    if (file == NULL)
         return 1;
 
-    if (fgets(hex, sizeof(hex), f) == NULL) {
-        fclose(f);
+    if (fgets(hex, sizeof(hex), file) == NULL) {
+        fclose(file);
         return -1;
     }
 
-    fclose(f);
+    fclose(file);
 
     return from_hex(hex, key, DEMO_KEY_BYTES) == 0 ? 0 : -1;
 }
@@ -220,119 +227,119 @@ static int key_read(const char *path, uint8_t key[DEMO_KEY_BYTES])
  * Ciphertexts: "demo-ciphertext", "<count> <bits>", one hex line per codeword
  * ------------------------------------------------------------------------ */
 
-int demo_ct_alloc(DemoCiphertext *ct, size_t count, size_t bits)
+int demo_ct_alloc(DemoCiphertext *ciphertext, size_t count, size_t bits)
 {
     size_t bytes = (bits + 7) / 8;
 
-    ct->count = 0;
-    ct->bits = bits;
-    ct->data = calloc(count ? count : 1, sizeof(*ct->data));
+    ciphertext->count = 0;
+    ciphertext->bits = bits;
+    ciphertext->data = calloc(count ? count : 1, sizeof(*ciphertext->data));
 
-    if (ct->data == NULL)
+    if (ciphertext->data == NULL)
         return -1;
 
     for (size_t i = 0; i < count; ++i) {
-        ct->data[i] = calloc(bytes ? bytes : 1, 1);
+        ciphertext->data[i] = calloc(bytes ? bytes : 1, 1);
 
-        if (ct->data[i] == NULL) {
-            ct->count = i;
-            demo_ct_free(ct);
+        if (ciphertext->data[i] == NULL) {
+            ciphertext->count = i;
+            demo_ct_free(ciphertext);
             return -1;
         }
     }
 
-    ct->count = count;
+    ciphertext->count = count;
 
     return 0;
 }
 
-void demo_ct_free(DemoCiphertext *ct)
+void demo_ct_free(DemoCiphertext *ciphertext)
 {
-    if (ct->data != NULL) {
-        for (size_t i = 0; i < ct->count; ++i)
-            free(ct->data[i]);
+    if (ciphertext->data != NULL) {
+        for (size_t i = 0; i < ciphertext->count; ++i)
+            free(ciphertext->data[i]);
 
-        free(ct->data);
+        free(ciphertext->data);
     }
 
-    ct->data = NULL;
-    ct->count = 0;
+    ciphertext->data = NULL;
+    ciphertext->count = 0;
 }
 
-static int ct_write(const char *path, const DemoCiphertext *ct)
+static int ct_write(const char *path, const DemoCiphertext *ciphertext)
 {
-    size_t bytes = (ct->bits + 7) / 8;
+    size_t bytes = (ciphertext->bits + 7) / 8;
     char *hex = malloc(2 * bytes + 1);
-    FILE *f = fopen(path, "w");
+    FILE *file = fopen(path, "w");
 
-    if (f == NULL || hex == NULL) {
-        if (f == NULL)
+    if (file == NULL || hex == NULL) {
+        if (file == NULL)
             perror(path);
         else
-            fclose(f);
+            fclose(file);
         free(hex);
         return -1;
     }
 
-    fprintf(f, "demo-ciphertext\n%zu %zu\n", ct->count, ct->bits);
+    fprintf(file, "demo-ciphertext\n%zu %zu\n", ciphertext->count, ciphertext->bits);
 
-    for (size_t i = 0; i < ct->count; ++i) {
-        to_hex(ct->data[i], bytes, hex);
-        fprintf(f, "%s\n", hex);
+    for (size_t i = 0; i < ciphertext->count; ++i) {
+        to_hex(ciphertext->data[i], bytes, hex);
+        fprintf(file, "%s\n", hex);
     }
 
     free(hex);
-    fclose(f);
+    fclose(file);
 
     return 0;
 }
 
-static int ct_read(const char *path, DemoCiphertext *ct)
+static int ct_read(const char *path, DemoCiphertext *ciphertext)
 {
     char header[64];
     size_t count, bits, bytes;
     char *line = NULL;
-    FILE *f = fopen(path, "r");
+    FILE *file = fopen(path, "r");
 
-    memset(ct, 0, sizeof(*ct));
+    memset(ciphertext, 0, sizeof(*ciphertext));
 
-    if (f == NULL) {
+    if (file == NULL) {
         perror(path);
         return -1;
     }
 
-    if (fgets(header, sizeof(header), f) == NULL ||
+    if (fgets(header, sizeof(header), file) == NULL ||
         strncmp(header, "demo-ciphertext", 15) != 0 ||
-        fgets(header, sizeof(header), f) == NULL ||
+        fgets(header, sizeof(header), file) == NULL ||
         sscanf(header, "%zu %zu", &count, &bits) != 2 ||
         count == 0 || bits == 0 || count > (1u << 20) || bits > (1u << 30)) {
         fprintf(stderr, "%s: not a ciphertext file\n", path);
-        fclose(f);
+        fclose(file);
         return -1;
     }
 
     bytes = (bits + 7) / 8;
     line = malloc(2 * bytes + 8);
 
-    if (line == NULL || demo_ct_alloc(ct, count, bits) != 0) {
+    if (line == NULL || demo_ct_alloc(ciphertext, count, bits) != 0) {
         free(line);
-        fclose(f);
+        fclose(file);
         return -1;
     }
 
     for (size_t i = 0; i < count; ++i) {
-        if (fgets(line, (int)(2 * bytes + 8), f) == NULL ||
-            from_hex(line, ct->data[i], bytes) != 0) {
+        if (fgets(line, (int)(2 * bytes + 8), file) == NULL ||
+            from_hex(line, ciphertext->data[i], bytes) != 0) {
             fprintf(stderr, "%s: malformed codeword %zu\n", path, i);
-            demo_ct_free(ct);
+            demo_ct_free(ciphertext);
             free(line);
-            fclose(f);
+            fclose(file);
             return -1;
         }
     }
 
     free(line);
-    fclose(f);
+    fclose(file);
 
     return 0;
 }
@@ -341,37 +348,88 @@ static int ct_read(const char *path, DemoCiphertext *ct)
  * Messages
  * ------------------------------------------------------------------------ */
 
-int demo_pad_message(const char *s, uint8_t *buf, size_t len)
-{
-    size_t n = s == NULL ? 0 : strlen(s);
+#define HEX_PREFIX "hex:"
+#define HEX_PREFIX_LENGTH (sizeof(HEX_PREFIX) - 1)
 
-    if (n > len) {
-        fprintf(stderr, "message too long: %zu bytes, at most %zu\n", n, len);
+static int is_hex_message(const char *text)
+{
+    return text != NULL && strncmp(text, HEX_PREFIX, HEX_PREFIX_LENGTH) == 0;
+}
+
+size_t demo_message_length(const char *text)
+{
+    if (text == NULL)
+        return 0;
+
+    if (is_hex_message(text))
+        return strlen(text + HEX_PREFIX_LENGTH) / 2;
+
+    return strlen(text);
+}
+
+int demo_pad_message(const char *text, uint8_t *buffer, size_t len)
+{
+    const size_t length = demo_message_length(text);
+
+    if (length > len) {
+        fprintf(stderr, "message too long: %zu bytes, at most %zu\n", length, len);
         return -1;
     }
 
-    memset(buf, 0, len);
-    if (n > 0)
-        memcpy(buf, s, n);
+    memset(buffer, 0, len);
+
+    if (is_hex_message(text)) {
+        const char *digits = text + HEX_PREFIX_LENGTH;
+
+        if (strlen(digits) % 2 != 0 || from_hex(digits, buffer, length) != 0) {
+            fprintf(stderr, "malformed hex message\n");
+            return -1;
+        }
+    } else if (length > 0) {
+        memcpy(buffer, text, length);
+    }
 
     return 0;
 }
 
-void demo_print_bytes(const char *label, const uint8_t *buf, size_t len)
+char *demo_random_message(size_t bits)
+{
+    const size_t bytes = (bits + 7) / 8;
+    uint8_t *buffer = malloc(bytes ? bytes : 1);
+    char *text = malloc(HEX_PREFIX_LENGTH + 2 * bytes + 1);
+
+    if (buffer == NULL || text == NULL) {
+        free(buffer);
+        free(text);
+        return NULL;
+    }
+
+    randombytes_buf(buffer, bytes);
+    if (bits % 8 != 0)
+        buffer[bytes - 1] &= (uint8_t)((1u << (bits % 8)) - 1);
+
+    memcpy(text, HEX_PREFIX, HEX_PREFIX_LENGTH);
+    to_hex(buffer, bytes, text + HEX_PREFIX_LENGTH);
+    free(buffer);
+
+    return text;
+}
+
+void demo_print_bytes(const char *label, const uint8_t *buffer, size_t len)
 {
     int printable = 1;
     char *hex;
 
-    while (len > 0 && buf[len - 1] == 0)
+    while (len > 0 && buffer[len - 1] == 0)
         --len;
 
     for (size_t i = 0; i < len; ++i) {
-        if (!isprint(buf[i]))
+        if (!isprint(buffer[i]))
             printable = 0;
     }
 
     if (printable) {
-        printf("%s: %.*s\n", label, (int)len, (const char *)buf);
+        printf("%s: %.*s\n", label, (int)len, (const char *)buffer);
         return;
     }
 
@@ -379,7 +437,7 @@ void demo_print_bytes(const char *label, const uint8_t *buf, size_t len)
     if (hex == NULL)
         return;
 
-    to_hex(buf, len, hex);
+    to_hex(buffer, len, hex);
     printf("%s (hex): %s\n", label, hex);
     free(hex);
 }
@@ -398,13 +456,13 @@ typedef struct {
 
 static void usage(const DemoOps *ops)
 {
-    const char *n = ops->name;
+    const char *name = ops->name;
 
     fprintf(stderr,
         "usage: demo_%s [--dir DIR] <command> ...\n"
         "\n"
         "  setup [name=value ...]    write the parameters (shown below)\n",
-        n);
+        name);
 
     if (ops->regular_keys)
         fprintf(stderr, "  keygen                    generate the regular key\n");
@@ -422,6 +480,7 @@ static void usage(const DemoOps *ops)
         fprintf(stderr, "  adecode CIPHERTEXT\n");
     }
 
+    fprintf(stderr, "\nmessages are text, or hex:<hex digits> for arbitrary bytes\n");
     fprintf(stderr, "\nparameters (default):\n");
     for (size_t i = 0; ops->params[i].name != NULL; ++i) {
         fprintf(stderr, "  %-16s %-8s %s\n", ops->params[i].name,
@@ -429,51 +488,51 @@ static void usage(const DemoOps *ops)
     }
 }
 
-static int load_state(const DemoState *st, DemoParams *params, DemoKeys *keys)
+static int load_state(const DemoState *state, DemoParams *params, DemoKeys *keys)
 {
-    int rc;
+    int result;
 
     memset(keys, 0, sizeof(*keys));
-    params_load(params, st->ops->params, st->params_path);
+    params_load(params, state->ops->params, state->params_path);
 
-    rc = key_read(st->regular_path, keys->regular);
-    if (rc < 0) {
-        fprintf(stderr, "%s: malformed key\n", st->regular_path);
+    result = key_read(state->regular_path, keys->regular);
+    if (result < 0) {
+        fprintf(stderr, "%s: malformed key\n", state->regular_path);
         return -1;
     }
-    keys->have_regular = rc == 0;
+    keys->have_regular = result == 0;
 
-    rc = key_read(st->anamorphic_path, keys->anamorphic);
-    if (rc < 0) {
-        fprintf(stderr, "%s: malformed key\n", st->anamorphic_path);
+    result = key_read(state->anamorphic_path, keys->anamorphic);
+    if (result < 0) {
+        fprintf(stderr, "%s: malformed key\n", state->anamorphic_path);
         return -1;
     }
-    keys->have_anamorphic = rc == 0;
+    keys->have_anamorphic = result == 0;
 
     return 0;
 }
 
-static int cmd_setup(DemoState *st, int argc, char **argv)
+static int cmd_setup(DemoState *state, int argc, char **argv)
 {
     DemoParams params;
     DemoKeys keys = {0};
     void *handle;
 
-    params_load(&params, st->ops->params, st->params_path);
+    params_load(&params, state->ops->params, state->params_path);
 
     for (int i = 0; i < argc; ++i) {
-        char *eq = strchr(argv[i], '=');
+        char *equals = strchr(argv[i], '=');
         char name[64];
 
-        if (eq == NULL || (size_t)(eq - argv[i]) >= sizeof(name)) {
+        if (equals == NULL || (size_t)(equals - argv[i]) >= sizeof(name)) {
             fprintf(stderr, "expected name=value, got '%s'\n", argv[i]);
             return -1;
         }
 
-        memcpy(name, argv[i], (size_t)(eq - argv[i]));
-        name[eq - argv[i]] = '\0';
+        memcpy(name, argv[i], (size_t)(equals - argv[i]));
+        name[equals - argv[i]] = '\0';
 
-        if (demo_params_set(&params, name, eq + 1) != 0)
+        if (demo_params_set(&params, name, equals + 1) != 0)
             return -1;
     }
 
@@ -482,27 +541,27 @@ static int cmd_setup(DemoState *st, int argc, char **argv)
     randombytes_buf(keys.anamorphic, sizeof(keys.anamorphic));
     keys.have_regular = keys.have_anamorphic = 1;
 
-    handle = st->ops->open(&params, &keys);
+    handle = state->ops->open(&params, &keys);
     if (handle == NULL)
         return -1;
-    st->ops->close(handle);
+    state->ops->close(handle);
 
-    if (params_save(&params, st->params_path) != 0)
+    if (params_save(&params, state->params_path) != 0)
         return -1;
 
-    for (size_t i = 0; st->ops->params[i].name != NULL; ++i)
-        printf("%s=%s\n", st->ops->params[i].name, params.values[i]);
+    for (size_t i = 0; state->ops->params[i].name != NULL; ++i)
+        printf("%s=%s\n", state->ops->params[i].name, params.values[i]);
 
     return 0;
 }
 
-static int cmd_keygen(DemoState *st, int anamorphic)
+static int cmd_keygen(DemoState *state, int anamorphic)
 {
     uint8_t key[DEMO_KEY_BYTES];
-    const char *path = anamorphic ? st->anamorphic_path : st->regular_path;
+    const char *path = anamorphic ? state->anamorphic_path : state->regular_path;
 
-    if (anamorphic ? !st->ops->anamorphic : !st->ops->regular_keys) {
-        fprintf(stderr, "demo_%s has no %s key\n", st->ops->name,
+    if (anamorphic ? !state->ops->anamorphic : !state->ops->regular_keys) {
+        fprintf(stderr, "demo_%s has no %s key\n", state->ops->name,
                 anamorphic ? "anamorphic" : "regular");
         return -1;
     }
@@ -518,23 +577,23 @@ static int cmd_keygen(DemoState *st, int anamorphic)
 }
 
 /* which: "regular" or "anamorphic"; returns the state path or NULL */
-static const char *key_path(const DemoState *st, const char *which)
+static const char *key_path(const DemoState *state, const char *which)
 {
-    if (strcmp(which, "regular") == 0 && st->ops->regular_keys)
-        return st->regular_path;
+    if (strcmp(which, "regular") == 0 && state->ops->regular_keys)
+        return state->regular_path;
 
-    if (strcmp(which, "anamorphic") == 0 && st->ops->anamorphic)
-        return st->anamorphic_path;
+    if (strcmp(which, "anamorphic") == 0 && state->ops->anamorphic)
+        return state->anamorphic_path;
 
-    fprintf(stderr, "demo_%s has no %s key\n", st->ops->name, which);
+    fprintf(stderr, "demo_%s has no %s key\n", state->ops->name, which);
 
     return NULL;
 }
 
-static int cmd_export(const DemoState *st, const char *which, const char *file)
+static int cmd_export(const DemoState *state, const char *which, const char *file)
 {
     uint8_t key[DEMO_KEY_BYTES];
-    const char *path = key_path(st, which);
+    const char *path = key_path(state, which);
 
     if (path == NULL)
         return -1;
@@ -553,10 +612,10 @@ static int cmd_export(const DemoState *st, const char *which, const char *file)
     return 0;
 }
 
-static int cmd_import(const DemoState *st, const char *which, const char *file)
+static int cmd_import(const DemoState *state, const char *which, const char *file)
 {
     uint8_t key[DEMO_KEY_BYTES];
-    const char *path = key_path(st, which);
+    const char *path = key_path(state, which);
 
     if (path == NULL)
         return -1;
@@ -576,15 +635,15 @@ static int cmd_import(const DemoState *st, const char *which, const char *file)
 }
 
 /* opens the code; the keys needed by the operation must be present */
-static void *open_code(const DemoState *st, int need_regular, int need_anamorphic)
+static void *open_code(const DemoState *state, int need_regular, int need_anamorphic)
 {
     DemoParams params;
     DemoKeys keys;
 
-    if (load_state(st, &params, &keys) != 0)
+    if (load_state(state, &params, &keys) != 0)
         return NULL;
 
-    if (need_regular && st->ops->regular_keys && !keys.have_regular) {
+    if (need_regular && state->ops->regular_keys && !keys.have_regular) {
         fprintf(stderr, "no regular key: run keygen or import-key regular\n");
         return NULL;
     }
@@ -594,15 +653,15 @@ static void *open_code(const DemoState *st, int need_regular, int need_anamorphi
         return NULL;
     }
 
-    return st->ops->open(&params, &keys);
+    return state->ops->open(&params, &keys);
 }
 
-static int cmd_encode(const DemoState *st, int anamorphic, int argc, char **argv)
+static int cmd_encode(const DemoState *state, int anamorphic, int argc, char **argv)
 {
     const char *message = NULL, *amessage = NULL, *file;
-    DemoCiphertext ct = {0};
+    DemoCiphertext ciphertext = {0};
     void *handle;
-    int rc;
+    int result;
 
     if (anamorphic) {
         if (argc < 2 || argc > 3)
@@ -616,55 +675,55 @@ static int cmd_encode(const DemoState *st, int anamorphic, int argc, char **argv
     }
     file = argv[argc - 1];
 
-    handle = open_code(st, 1, anamorphic);
+    handle = open_code(state, 1, anamorphic);
     if (handle == NULL)
         return -1;
 
-    rc = anamorphic ? st->ops->aencode(handle, message, amessage, &ct)
-                    : st->ops->encode(handle, message, &ct);
+    result = anamorphic ? state->ops->aencode(handle, message, amessage, &ciphertext)
+                    : state->ops->encode(handle, message, &ciphertext);
 
-    if (rc == 0)
-        rc = ct_write(file, &ct);
+    if (result == 0)
+        result = ct_write(file, &ciphertext);
 
-    if (rc == 0)
-        printf("wrote %zu codeword%s of %zu bits to %s\n", ct.count,
-               ct.count == 1 ? "" : "s", ct.bits, file);
+    if (result == 0)
+        printf("wrote %zu codeword%s of %zu bits to %s\n", ciphertext.count,
+               ciphertext.count == 1 ? "" : "s", ciphertext.bits, file);
 
-    demo_ct_free(&ct);
-    st->ops->close(handle);
+    demo_ct_free(&ciphertext);
+    state->ops->close(handle);
 
-    return rc;
+    return result;
 }
 
-static int cmd_decode(const DemoState *st, int anamorphic, const char *file)
+static int cmd_decode(const DemoState *state, int anamorphic, const char *file)
 {
-    DemoCiphertext ct;
+    DemoCiphertext ciphertext;
     void *handle;
-    int rc;
+    int result;
 
-    if (ct_read(file, &ct) != 0)
+    if (ct_read(file, &ciphertext) != 0)
         return -1;
 
-    handle = open_code(st, 1, anamorphic);
+    handle = open_code(state, 1, anamorphic);
     if (handle == NULL) {
-        demo_ct_free(&ct);
+        demo_ct_free(&ciphertext);
         return -1;
     }
 
-    rc = anamorphic ? st->ops->adecode(handle, &ct) : st->ops->decode(handle, &ct);
+    result = anamorphic ? state->ops->adecode(handle, &ciphertext) : state->ops->decode(handle, &ciphertext);
 
-    demo_ct_free(&ct);
-    st->ops->close(handle);
+    demo_ct_free(&ciphertext);
+    state->ops->close(handle);
 
-    return rc;
+    return result;
 }
 
 int demo_main(const DemoOps *ops, int argc, char **argv)
 {
-    DemoState st = {.ops = ops};
+    DemoState state = {.ops = ops};
     char default_dir[128];
     const char *cmd;
-    int rc = -1;
+    int result = -1;
 
     if (sodium_init() < 0) {
         fprintf(stderr, "libsodium initialisation failed\n");
@@ -675,10 +734,10 @@ int demo_main(const DemoOps *ops, int argc, char **argv)
     --argc;
 
     snprintf(default_dir, sizeof(default_dir), "%s_demo", ops->name);
-    st.dir = default_dir;
+    state.dir = default_dir;
 
     if (argc >= 2 && strcmp(argv[0], "--dir") == 0) {
-        st.dir = argv[1];
+        state.dir = argv[1];
         argv += 2;
         argc -= 2;
     }
@@ -692,37 +751,37 @@ int demo_main(const DemoOps *ops, int argc, char **argv)
     ++argv;
     --argc;
 
-    mkdir(st.dir, 0777);
-    snprintf(st.params_path, sizeof(st.params_path), "%s/params.txt", st.dir);
-    snprintf(st.regular_path, sizeof(st.regular_path), "%s/key.regular", st.dir);
-    snprintf(st.anamorphic_path, sizeof(st.anamorphic_path), "%s/key.anamorphic", st.dir);
+    mkdir(state.dir, 0777);
+    snprintf(state.params_path, sizeof(state.params_path), "%s/params.txt", state.dir);
+    snprintf(state.regular_path, sizeof(state.regular_path), "%s/key.regular", state.dir);
+    snprintf(state.anamorphic_path, sizeof(state.anamorphic_path), "%s/key.anamorphic", state.dir);
 
     if (strcmp(cmd, "setup") == 0) {
-        rc = cmd_setup(&st, argc, argv);
+        result = cmd_setup(&state, argc, argv);
     } else if (strcmp(cmd, "keygen") == 0 && argc == 0) {
-        rc = cmd_keygen(&st, 0);
+        result = cmd_keygen(&state, 0);
     } else if (strcmp(cmd, "akeygen") == 0 && argc == 0) {
-        rc = cmd_keygen(&st, 1);
+        result = cmd_keygen(&state, 1);
     } else if (strcmp(cmd, "export-key") == 0 && argc == 2) {
-        rc = cmd_export(&st, argv[0], argv[1]);
+        result = cmd_export(&state, argv[0], argv[1]);
     } else if (strcmp(cmd, "import-key") == 0 && argc == 2) {
-        rc = cmd_import(&st, argv[0], argv[1]);
+        result = cmd_import(&state, argv[0], argv[1]);
     } else if (strcmp(cmd, "encode") == 0) {
-        rc = cmd_encode(&st, 0, argc, argv);
+        result = cmd_encode(&state, 0, argc, argv);
     } else if (strcmp(cmd, "aencode") == 0 && ops->anamorphic) {
-        rc = cmd_encode(&st, 1, argc, argv);
+        result = cmd_encode(&state, 1, argc, argv);
     } else if (strcmp(cmd, "decode") == 0 && argc == 1) {
-        rc = cmd_decode(&st, 0, argv[0]);
+        result = cmd_decode(&state, 0, argv[0]);
     } else if (strcmp(cmd, "adecode") == 0 && argc == 1 && ops->anamorphic) {
-        rc = cmd_decode(&st, 1, argv[0]);
+        result = cmd_decode(&state, 1, argv[0]);
     } else {
-        rc = -2;
+        result = -2;
     }
 
-    if (rc == -2) {
+    if (result == -2) {
         usage(ops);
         return 2;
     }
 
-    return rc == 0 ? 0 : 1;
+    return result == 0 ? 0 : 1;
 }

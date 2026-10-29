@@ -1,6 +1,8 @@
 #ifndef MBPRC_HIGH_H
 #define MBPRC_HIGH_H
 
+/* PRC_high: a PRC for long messages from a lambda-bit PRC and an ECC (see prc_high.c). */
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -8,72 +10,23 @@
 #include "../multibit_prc_rr.h"
 #include "../../../utils/ecc.h"
 
-/*
- * ================================================================
- * PRC^ell_high parameters
- * ================================================================
- *
- * The construction combines:
- *
- *     - an underlying PRC^lambda_low
- *     - an ECC
- *     - a seeded pseudorandom generator
- *     - a random bit permutation
- *
- * The low PRC must encode lambda seed bits into
- * low_codeword_bits bits.
- *
- * The ECC must encode a message into ecc_codeword_bits bits.
- *
- * Therefore every high-level ciphertext has
- *
- *     low_codeword_bits + ecc_codeword_bits
- *
- * bits.
- *
- * The permutation operates on these individual bits.
- * ================================================================
- */
-
 typedef struct {
+    /* the inner lambda-bit PRC (PRC^lambda_low); not owned */
+    const MBPRC *inner;
 
-    /*
-     * Underlying PRC^lambda_low.
-     *
-     * This object is not owned by the high-level PRC. This PRC must be able to encode exactly lambda bits
-     */
-    const MBPRC *low_prc;
-
-    /*
-     * Underlying error-correcting code.
-     *
-     * This object is not owned by the high-level PRC.
-     */
+    /* the error-correcting code of the message; not owned */
     const ECC *ecc;
 
-    /*
-     * Security parameter lambda in bits.
-     *
-     * Must be a multiple of 8 because the PRG seed is represented
-     * as a byte array.
-     */
+    /* security parameter lambda in bits, a multiple of 8: the length of the seed r */
     size_t lambda;
 
-    /*
-     * Number of bits in the prc message.
-     */
+    /* length of the message in bits, a multiple of 8 */
     size_t message_bits;
-
-
 } PRCHigh_Params;
 
+MBPRC prc_high(const PRCHigh_Params *params);
 
-MBPRC prc_high(
-    const PRCHigh_Params *params
-);
-
-MBPRC_RR prc_high_rr(
-    const PRCHigh_Params *params
-);
+/* PRC_high as a seed-recoverable PRC with rho = r (randomness-recovery anamorphism) */
+MBPRC_RR prc_high_rr(const PRCHigh_Params *params);
 
 #endif /* MBPRC_HIGH_H */

@@ -9,3 +9,4 @@ build/
 
 *.txt
 !CMakeLists.txt
+!results/benchmark.txt

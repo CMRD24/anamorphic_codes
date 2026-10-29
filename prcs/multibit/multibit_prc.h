@@ -1,267 +1,117 @@
 #ifndef MULTIBIT_PRC_H
 #define MULTIBIT_PRC_H
 
+/*
+ * Multibit PRC:
+ *
+ *     KeyGen() -> (enc_key, dec_key)
+ *     Encode(enc_key, m) -> c
+ *     Decode(dec_key, c) -> m or failure
+ *
+ * Messages and codewords are packed bit strings (LSB first). Every
+ * implementation defines its own struct MBPRC_EncKey / MBPRC_DecKey.
+ */
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <stdio.h>
 
 #include "../../utils/random.h"
 
-/*
- * ================================================================
- * Randomness
- * ================================================================
- */
-
-// typedef int (*MBPRC_Rng)(
-//     void *ctx,
-//     uint8_t *out,
-//     size_t len
-// );
-
-// typedef struct {
-//     MBPRC_Rng rng;
-//     void *ctx;
-// } MBPRC_Random;
-
-
-/*
- * ================================================================
- * Opaque key types
- * ================================================================
- */
-
 typedef struct MBPRC_EncKey MBPRC_EncKey;
 typedef struct MBPRC_DecKey MBPRC_DecKey;
-
-
-/*
- * ================================================================
- * Key pair
- * ================================================================
- *
- * KeyGen generates both keys simultaneously.
- */
 
 typedef struct {
     MBPRC_EncKey *enc;
     MBPRC_DecKey *dec;
 } MBPRC_Keys;
 
-
-/*
- * ================================================================
- * Multibit PRC interface
- * ================================================================
- *
- * A multibit PRC provides:
- *
- *     KeyGen() -> (ek, dk)
- *     Encode(ek, m) -> c
- *     Decode(dk, c) -> m
- *
- * The concrete key types and parameters are hidden behind
- * this interface.
- * ================================================================
- */
-
 typedef struct {
-
-    /*
-     * Implementation-specific parameters.
-     *
-     * The generic interface does not interpret this pointer.
-     */
+    /* implementation-specific parameters */
     const void *params;
 
+    /* number of bits of a codeword */
+    size_t (*block_length)(const void *params);
 
-    size_t (*blocksize)(
-        const void *params
-    );
-
-
-    /*
-     * ------------------------------------------------------------
-     * Key generation
-     * ------------------------------------------------------------
-     *
-     * Generates both the encoding and decoding keys.
-     */
-    MBPRC_Keys *(*keygen)(
-        const void *params,
-        RandomnessSource *random
-    );
-
+    /* generates the encoding and the decoding key, NULL on error */
+    MBPRC_Keys *(*keygen)(const void *params, RandomnessSource *random);
 
     /*
-     * ------------------------------------------------------------
-     * Encoding
-     * ------------------------------------------------------------
-     *
-     * Encodes a message.
-     *
-     * Returns a newly allocated packed ciphertext.
-     *
-     * The number of valid ciphertext bits is written to
-     * output_bits.
-     *
-     * The caller owns the returned buffer.
+     * Encodes a message of message_bits bits. Returns a newly allocated codeword
+     * of *codeword_bits bits, NULL on error.
      */
-    uint8_t *(*encode)(
-        const void *params,
-        const MBPRC_EncKey *key,
-        const uint8_t *message,
-        size_t message_bits,
-        RandomnessSource *random,
-        size_t *output_bits
-    );
-
+    uint8_t *(*encode)(const void *params,
+                       const MBPRC_EncKey *enc_key,
+                       const uint8_t *message,
+                       size_t message_bits,
+                       RandomnessSource *random,
+                       size_t *codeword_bits);
 
     /*
-     * ------------------------------------------------------------
-     * Decoding
-     * ------------------------------------------------------------
-     *
-     * Decodes a ciphertext.
-     *
-     * Returns:
-     *
-     *     1 = successfully decoded
-     *     0 = decoding failure
-     *
-     * On success, the decoded message is written to message_out.
-     *
+     * Returns 1 and writes the message to message_out (its length in bits to
+     * message_bits_out) on success, 0 on a decoding failure.
      */
-    int (*decode)(
-        const void *params,
-        const MBPRC_DecKey *key,
-        const uint8_t *ciphertext,
-        size_t ciphertext_bits,
-        uint8_t *message_out,
-        size_t *message_bits_out
-    );
+    int (*decode)(const void *params,
+                  const MBPRC_DecKey *dec_key,
+                  const uint8_t *codeword,
+                  size_t codeword_bits,
+                  uint8_t *message_out,
+                  size_t *message_bits_out);
 
-
-    /*
-     * ------------------------------------------------------------
-     * Key destruction
-     * ------------------------------------------------------------
-     */
-
-    void (*free_enc_key)(
-        const void *params,
-        MBPRC_EncKey *key
-    );
-
-    void (*free_dec_key)(
-        const void *params,
-        MBPRC_DecKey *key
-    );
-
+    void (*free_enc_key)(const void *params, MBPRC_EncKey *enc_key);
+    void (*free_dec_key)(const void *params, MBPRC_DecKey *dec_key);
 } MBPRC;
 
 
-/*
- * ================================================================
- * Convenience functions
- * ================================================================
- */
-
 static inline size_t
-mbprc_blocksize(
-    const MBPRC *prc)
+mbprc_block_length(const MBPRC *prc)
 {
-    return prc->blocksize(
-        prc->params
-    );
+    return prc->block_length(prc->params);
 }
-
 
 static inline MBPRC_Keys *
-mbprc_keygen(
-    const MBPRC *prc,
-    RandomnessSource *random)
+mbprc_keygen(const MBPRC *prc, RandomnessSource *random)
 {
-    return prc->keygen(
-        prc->params,
-        random
-    );
+    return prc->keygen(prc->params, random);
 }
-
 
 static inline uint8_t *
-mbprc_encode(
-    const MBPRC *prc,
-    const MBPRC_EncKey *key,
-    const uint8_t *message,
-    size_t message_bits,
-    RandomnessSource *random,
-    size_t *output_bits)
+mbprc_encode(const MBPRC *prc, const MBPRC_EncKey *enc_key, const uint8_t *message,
+             size_t message_bits, RandomnessSource *random, size_t *codeword_bits)
 {
-    return prc->encode(
-        prc->params,
-        key,
-        message,
-        message_bits,
-        random,
-        output_bits
-    );
+    return prc->encode(prc->params, enc_key, message, message_bits, random, codeword_bits);
 }
-
 
 static inline int
-mbprc_decode(
-    const MBPRC *prc,
-    const MBPRC_DecKey *key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits,
-    uint8_t *message_out,
-    size_t *message_bits_out)
+mbprc_decode(const MBPRC *prc, const MBPRC_DecKey *dec_key, const uint8_t *codeword,
+             size_t codeword_bits, uint8_t *message_out, size_t *message_bits_out)
 {
-    return prc->decode(
-        prc->params,
-        key,
-        ciphertext,
-        ciphertext_bits,
-        message_out,
-        message_bits_out
-    );
+    return prc->decode(prc->params, dec_key, codeword, codeword_bits, message_out,
+                       message_bits_out);
 }
 
-
 static inline void
-mbprc_free_enc_key(
-    const MBPRC *prc,
-    MBPRC_EncKey *key)
+mbprc_free_enc_key(const MBPRC *prc, MBPRC_EncKey *enc_key)
 {
-    prc->free_enc_key(prc->params, key);
+    if (enc_key != NULL)
+        prc->free_enc_key(prc->params, enc_key);
 }
 
-
 static inline void
-mbprc_free_dec_key(
-    const MBPRC *prc,
-    MBPRC_DecKey *key)
+mbprc_free_dec_key(const MBPRC *prc, MBPRC_DecKey *dec_key)
 {
-    prc->free_dec_key(prc->params, key);
+    if (dec_key != NULL)
+        prc->free_dec_key(prc->params, dec_key);
 }
 
-
 static inline void
-mbprc_free_keys(
-    const MBPRC *prc,
-    MBPRC_Keys *keys)
+mbprc_free_keys(const MBPRC *prc, MBPRC_Keys *keys)
 {
-    if (!keys)
+    if (keys == NULL)
         return;
 
-    if (keys->enc)
-        prc->free_enc_key(prc->params, keys->enc);
-
-    if (keys->dec)
-        prc->free_dec_key(prc->params, keys->dec);
-
+    mbprc_free_enc_key(prc, keys->enc);
+    mbprc_free_dec_key(prc, keys->dec);
     free(keys);
 }
 

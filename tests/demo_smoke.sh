@@ -79,12 +79,15 @@ check_code() {
     fi
 }
 
-check_code ldpc    1 1 ""            ""               n=1024 r=256 g=512 t=10
+# the smaller admissible LDPC instance (r = r' = 64, g = 4160) keeps the test fast
+LDPC="n=16384 epsilon=6/7"
+
+check_code ldpc    1 1 ""            ""               $LDPC
 ROBUST=0
 check_code pp      1 1 ""            "anamorphic-text"
-check_code dc      1 0 ""            ""
-check_code 1a      1 1 "1"           "1"
-check_code low     1 1 "hello"       "10110"          ell=40
+check_code dc      1 0 ""            ""               slice_bits=15
+check_code 1a      1 1 "1"           "1"              $LDPC
+check_code low     1 1 "hello"       "10110"          $LDPC ell=40
 check_code high    1 1 "hi-there"    "hide-me"        message_bits=64
 check_code sharp   1 1 "ping"        "hide-me"
 check_code cca     1 1 "ping"        "hide-me"
@@ -93,7 +96,16 @@ ROBUST=1
 check_code rlnc    0 1 "regular text" "hidden text"
 
 # with indication seeds (mu > 1) the decoder rejects regular ciphertexts again
-check_code cca     1 1 "ping"        "hide-me"        indication_len=4
+check_code cca     1 1 "ping"        "hide-me"        indication_seeds=4
+
+# hex messages ("hex:68656c6c6f" is "hello"); a malformed one is rejected
+run rlnc encode "hex:68656c6c6f" "$WORK/hex.ct"; ok "rlnc encode of a hex message"
+run rlnc decode "$WORK/hex.ct"; ok "rlnc decode of a hex message"
+expect "message: hello" "hex message not recovered"
+run rlnc encode "hex:6g" "$WORK/hex.ct"; [ "$STATUS" -ne 0 ] || fail "malformed hex message accepted"
+
+# parameters that violate a requirement of the LDPC PRC are rejected
+run ldpc setup n=1024 epsilon=3/4; [ "$STATUS" -ne 0 ] || fail "LDPC parameters with r <= 16 accepted"
 
 # unknown parameters and malformed keys are rejected
 run ldpc setup bogus=1; [ "$STATUS" -ne 0 ] || fail "unknown parameter accepted"

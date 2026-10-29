@@ -1,7 +1,16 @@
 #include "ecc.h"
 
+//used for simple testing
+
 /*
- * Hamming(7,4)
+ * Hamming(7,4) code (https://en.wikipedia.org/wiki/Hamming(7,4)).
+ *
+ * A linear [7,4,3] code over F_2: 4 data bits d are extended by 3 parity bits so
+ * that the codeword c satisfies H c = 0 for the parity-check matrix H whose column
+ * i is the binary representation of the position i = 1..7. The minimum distance is
+ * 3, so one bit error per codeword is corrected: after a single flip at position i
+ * the syndrome H c equals the column i, i.e. the syndrome is the error position.
+ * Two errors in one codeword are miscorrected.
  *
  * Each byte is split into two 4-bit nibbles.
  * Each nibble is encoded into a 7-bit Hamming codeword.
@@ -143,7 +152,7 @@ static uint8_t hamming_decode_codeword(uint8_t codeword)
  * Encoded size
  * ------------------------------------------------------------
  */
-size_t hamming_encoded_size(size_t input_len)
+static size_t hamming_encoded_size(size_t input_len)
 {
     /*
      * Every input byte becomes two Hamming(7,4) codewords,
@@ -157,7 +166,7 @@ size_t hamming_encoded_size(size_t input_len)
  * Decoded size
  * ------------------------------------------------------------
  */
-size_t hamming_decoded_size(size_t encoded_len)
+static size_t hamming_decoded_size(size_t encoded_len)
 {
     /*
      * Two codewords are required for every decoded byte.
@@ -175,7 +184,7 @@ size_t hamming_decoded_size(size_t encoded_len)
  * Encode
  * ------------------------------------------------------------
  */
-int hamming_encode(
+static int hamming_encode(
     const uint8_t *input,
     size_t input_len,
     uint8_t *output,
@@ -231,7 +240,7 @@ int hamming_encode(
  * Decode
  * ------------------------------------------------------------
  */
-int hamming_decode(
+static int hamming_decode(
     const uint8_t *input,
     size_t input_len,
     uint8_t *output,

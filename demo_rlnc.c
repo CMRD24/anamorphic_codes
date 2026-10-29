@@ -1,11 +1,12 @@
 /*
- * RLNC with the anamorphic mode (Reed-Solomon points in the headers).
+ * RLNC with the anamorphic mode (Reed-Solomon points in the global encoding
+ * vectors).
  *
- * The regular message is one generation of generation_size packets (the message
- * text, zero-padded to generation_size * packet_size bytes). A ciphertext file
- * holds `sent` symbols, each the global encoding vector followed by the payload.
- * The receiver collects the first `received` symbols for the anamorphic
- * decoding and all symbols for the regular decoding.
+ * The regular message is one generation of K = generation_size packets (the
+ * message text, zero-padded to generation_size * payload_bytes bytes). A
+ * ciphertext file holds T = sent_symbols symbols, each the global encoding vector
+ * followed by the payload. The receiver collects the first S = received_symbols
+ * symbols for the anamorphic decoding and all symbols for the regular decoding.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,51 +19,88 @@
 
 static const DemoParamSpec specs[] = {
     {"q", "256", "field size, a power of two up to 256"},
-    {"packet_size", "64", "payload bytes per symbol"},
+    {"payload_bytes", "64", "payload bytes per symbol"},
     {"generation_size", "16", "K: source packets per generation"},
     {"lambda", "64", "security parameter in bits (label length a = lambda / log2 q, K >= 2a)"},
-    {"received", "20", "S >= K: symbols the anamorphic receiver collects"},
-    {"sent", "40", "T >= S: symbols the sender emits"},
+    {"received_symbols", "20", "S >= K: symbols the anamorphic receiver collects"},
+    {"sent_symbols", "40", "T >= S: symbols the sender emits"},
     {NULL, NULL, NULL}
 };
 
 typedef struct {
-    rlnc_config_t cfg;
-    rlnc_aconfig_t acfg;
-    size_t sent;
+    rlnc_config_t config;
+    rlnc_aconfig_t aconfig;
+    size_t sent_symbols;
     int have_key;
     uint8_t key[DEMO_KEY_BYTES];
-} Rlnc;
+} RlncDemo;
 
 static void *rlnc_open(const DemoParams *params, const DemoKeys *keys)
 {
-    Rlnc *r = calloc(1, sizeof(*r));
+    RlncDemo *demo = calloc(1, sizeof(*demo));
 
-    if (r == NULL)
+    if (demo == NULL)
         return NULL;
 
-    r->cfg.q = (uint32_t)demo_param_size(params, "q");
-    r->cfg.packet_size = demo_param_size(params, "packet_size");
-    r->cfg.generation_size = demo_param_size(params, "generation_size");
-    r->acfg.lambda = demo_param_size(params, "lambda");
-    r->acfg.received = demo_param_size(params, "received");
-    r->sent = demo_param_size(params, "sent");
+    demo->config = (rlnc_config_t){
+        .q = (uint32_t)demo_param_size(params, "q"),
+        .payload_bytes = demo_param_size(params, "payload_bytes"),
+        .generation_size = demo_param_size(params, "generation_size"),
+    };
+    demo->aconfig = (rlnc_aconfig_t){
+        .lambda = demo_param_size(params, "lambda"),
+        .received_symbols = demo_param_size(params, "received_symbols"),
+    };
+    demo->sent_symbols = demo_param_size(params, "sent_symbols");
 
-    if (!rlnc_config_valid(&r->cfg)) {
-        fprintf(stderr, "invalid q / packet_size / generation_size\n");
-    } else if (rlnc_amsg_len(&r->cfg, &r->acfg) == 0) {
-        fprintf(stderr, "invalid anamorphic parameters: need received >= K and K >= 2 * ceil(lambda / log2 q)\n");
-    } else if (r->sent < r->acfg.received) {
-        fprintf(stderr, "sent must be at least received\n");
+    if (!rlnc_config_valid(&demo->config)) {
+        fprintf(stderr, "invalid q / payload_bytes / generation_size\n");
+    } else if (rlnc_amessage_symbols(&demo->config, &demo->aconfig) == 0) {
+        fprintf(stderr, "invalid anamorphic parameters: need received_symbols >= K and "
+                "K >= 2 * ceil(lambda / log2 q)\n");
+    } else if (demo->sent_symbols < demo->aconfig.received_symbols) {
+        fprintf(stderr, "sent_symbols must be at least received_symbols\n");
     } else {
-        r->have_key = keys->have_anamorphic;
-        memcpy(r->key, keys->anamorphic, sizeof(r->key));
-        return r;
+        demo->have_key = keys->have_anamorphic;
+        memcpy(demo->key, keys->anamorphic, sizeof(demo->key));
+        return demo;
     }
 
-    free(r);
+    free(demo);
 
     return NULL;
+}
+
+/* keyless code: the anamorphic key is the symmetric key itself */
+static int rlnc_akeygen_op(void *handle, const uint8_t key[DEMO_KEY_BYTES])
+{
+    RlncDemo *demo = handle;
+
+    demo->have_key = 1;
+    memcpy(demo->key, key, sizeof(demo->key));
+
+    return 0;
+}
+
+/*
+ * A uniformly random generation (every packet payload uniform) and a uniformly
+ * random anamorphic message (one byte per GF(q) symbol, reduced by aencode).
+ */
+static int rlnc_sample_messages(void *handle, char **message, char **amessage)
+{
+    const RlncDemo *demo = handle;
+
+    *message = demo_random_message(8 * demo->config.generation_size * demo->config.payload_bytes);
+    *amessage = demo_random_message(8 * rlnc_amessage_symbols(&demo->config, &demo->aconfig));
+
+    if (*message == NULL || *amessage == NULL) {
+        free(*message);
+        free(*amessage);
+        *message = *amessage = NULL;
+        return -1;
+    }
+
+    return 0;
 }
 
 static void rlnc_close(void *handle)
@@ -70,220 +108,207 @@ static void rlnc_close(void *handle)
     free(handle);
 }
 
-static size_t symbol_bytes(const Rlnc *r)
+static size_t symbol_bytes(const RlncDemo *demo)
 {
-    return r->cfg.generation_size + r->cfg.packet_size;
+    return demo->config.generation_size + demo->config.payload_bytes;
 }
 
 /* packets that point into the ciphertext codewords */
-static rlnc_packet_t *view_packets(const Rlnc *r, const DemoCiphertext *ct, size_t count)
+static rlnc_packet_t *view_packets(const RlncDemo *demo, const DemoCiphertext *ciphertext)
 {
-    rlnc_packet_t *p = calloc(count, sizeof(*p));
+    rlnc_packet_t *packets = calloc(ciphertext->count, sizeof(*packets));
 
-    for (size_t i = 0; p != NULL && i < count; ++i) {
-        p[i].global = ct->data[i];
-        p[i].payload = ct->data[i] + r->cfg.generation_size;
+    for (size_t i = 0; packets != NULL && i < ciphertext->count; ++i) {
+        packets[i].global_vector = ciphertext->data[i];
+        packets[i].payload = ciphertext->data[i] + demo->config.generation_size;
     }
 
-    return p;
+    return packets;
 }
 
-/* generation_size source packets with the canonical global vectors */
-static rlnc_packet_t *make_source(const Rlnc *r, const char *message)
+static void free_packets(rlnc_packet_t *packets, size_t count)
 {
-    const size_t K = r->cfg.generation_size, P = r->cfg.packet_size;
-    uint8_t *flat = calloc(K * P, 1);
-    rlnc_packet_t *src = calloc(K, sizeof(*src));
-    size_t made = 0;
+    for (size_t i = 0; packets != NULL && i < count; ++i)
+        rlnc_packet_free(&packets[i]);
 
-    if (flat == NULL || src == NULL || demo_pad_message(message, flat, K * P) != 0)
-        goto fail;
+    free(packets);
+}
 
-    for (; made < K; ++made) {
-        if (rlnc_packet_alloc(&r->cfg, &src[made]) != 0)
-            goto fail;
+static rlnc_packet_t *alloc_packets(const RlncDemo *demo, size_t count)
+{
+    rlnc_packet_t *packets = calloc(count, sizeof(*packets));
 
-        memcpy(src[made].payload, flat + made * P, P);
-        src[made].global[made] = 1;
+    for (size_t i = 0; packets != NULL && i < count; ++i) {
+        if (rlnc_packet_alloc(&demo->config, &packets[i]) != 0) {
+            free_packets(packets, i);
+            return NULL;
+        }
     }
 
-    free(flat);
-
-    return src;
-
-fail:
-    for (size_t i = 0; src != NULL && i < made; ++i)
-        rlnc_packet_free(&src[i]);
-    free(src);
-    free(flat);
-
-    return NULL;
+    return packets;
 }
 
-static void free_packets(rlnc_packet_t *p, size_t count)
+/* the K source packets of the message with the canonical global vectors e_k */
+static rlnc_packet_t *make_source(const RlncDemo *demo, const char *message)
 {
-    for (size_t i = 0; p != NULL && i < count; ++i)
-        rlnc_packet_free(&p[i]);
+    const size_t K = demo->config.generation_size;
+    const size_t payload_bytes = demo->config.payload_bytes;
+    uint8_t *generation = calloc(K * payload_bytes, 1);
+    rlnc_packet_t *source = alloc_packets(demo, K);
 
-    free(p);
+    if (generation == NULL || source == NULL ||
+        demo_pad_message(message, generation, K * payload_bytes) != 0) {
+        free(generation);
+        free_packets(source, K);
+        return NULL;
+    }
+
+    for (size_t k = 0; k < K; ++k) {
+        memcpy(source[k].payload, generation + k * payload_bytes, payload_bytes);
+        source[k].global_vector[k] = 1;
+    }
+
+    free(generation);
+
+    return source;
 }
 
-static int store_symbols(const Rlnc *r, const rlnc_packet_t *syms, DemoCiphertext *out)
+static int store_symbols(const RlncDemo *demo, const rlnc_packet_t *symbols, DemoCiphertext *out)
 {
-    if (demo_ct_alloc(out, r->sent, 8 * symbol_bytes(r)) != 0)
+    if (demo_ct_alloc(out, demo->sent_symbols, 8 * symbol_bytes(demo)) != 0)
         return -1;
 
-    for (size_t i = 0; i < r->sent; ++i) {
-        memcpy(out->data[i], syms[i].global, r->cfg.generation_size);
-        memcpy(out->data[i] + r->cfg.generation_size, syms[i].payload, r->cfg.packet_size);
+    for (size_t i = 0; i < demo->sent_symbols; ++i) {
+        memcpy(out->data[i], symbols[i].global_vector, demo->config.generation_size);
+        memcpy(out->data[i] + demo->config.generation_size, symbols[i].payload,
+               demo->config.payload_bytes);
     }
 
     return 0;
 }
 
-static rlnc_packet_t *alloc_symbols(const Rlnc *r)
-{
-    rlnc_packet_t *syms = calloc(r->sent, sizeof(*syms));
-    size_t i = 0;
-
-    for (; syms != NULL && i < r->sent; ++i) {
-        if (rlnc_packet_alloc(&r->cfg, &syms[i]) != 0) {
-            free_packets(syms, i);
-            return NULL;
-        }
-    }
-
-    return syms;
-}
-
 static int rlnc_encode_op(void *handle, const char *message, DemoCiphertext *out)
 {
-    Rlnc *r = handle;
-    RandomnessSource rng = linux_randomness();
-    rlnc_packet_t *src = make_source(r, message);
-    rlnc_packet_t *syms = alloc_symbols(r);
-    int rc = -1;
+    RlncDemo *demo = handle;
+    RandomnessSource random = linux_randomness();
+    rlnc_packet_t *source = make_source(demo, message);
+    rlnc_packet_t *symbols = alloc_packets(demo, demo->sent_symbols);
+    int result = -1;
 
-    if (src != NULL && syms != NULL) {
-        rc = 0;
-        for (size_t i = 0; rc == 0 && i < r->sent; ++i)
-            rc = rlnc_encode(&r->cfg, src, r->cfg.generation_size, &syms[i], &rng);
+    if (source != NULL && symbols != NULL) {
+        result = 0;
+        for (size_t i = 0; result == 0 && i < demo->sent_symbols; ++i)
+            result = rlnc_encode(&demo->config, source, demo->config.generation_size,
+                                 &symbols[i], &random);
     }
 
-    if (rc == 0)
-        rc = store_symbols(r, syms, out);
+    if (result == 0)
+        result = store_symbols(demo, symbols, out);
 
-    free_packets(src, r->cfg.generation_size);
-    free_packets(syms, r->sent);
+    free_packets(source, demo->config.generation_size);
+    free_packets(symbols, demo->sent_symbols);
 
-    if (rc != 0)
+    if (result != 0)
         fprintf(stderr, "encoding failed\n");
 
-    return rc;
+    return result;
 }
 
 static int rlnc_decode_op(void *handle, const DemoCiphertext *in)
 {
-    Rlnc *r = handle;
-    const size_t K = r->cfg.generation_size, P = r->cfg.packet_size;
-    rlnc_packet_t *recv, *dec = calloc(K, sizeof(*dec));
-    uint8_t *flat = calloc(K * P, 1);
-    int rc = -1;
+    RlncDemo *demo = handle;
+    const size_t K = demo->config.generation_size;
+    const size_t payload_bytes = demo->config.payload_bytes;
 
-    if (in->bits != 8 * symbol_bytes(r) || in->count < K) {
+    if (in->bits != 8 * symbol_bytes(demo) || in->count < K) {
         fprintf(stderr, "ciphertext does not match the parameters\n");
-        free(dec);
-        free(flat);
         return -1;
     }
 
-    recv = view_packets(r, in, in->count);
+    rlnc_packet_t *received = view_packets(demo, in);
+    rlnc_packet_t *decoded = alloc_packets(demo, K);
+    uint8_t *generation = calloc(K * payload_bytes, 1);
+    int result = -1;
 
-    for (size_t i = 0; dec != NULL && i < K; ++i) {
-        if (rlnc_packet_alloc(&r->cfg, &dec[i]) != 0)
-            goto done;
-    }
+    if (received != NULL && decoded != NULL && generation != NULL &&
+        rlnc_decode(&demo->config, received, in->count, decoded) == 0) {
+        for (size_t k = 0; k < K; ++k)
+            memcpy(generation + k * payload_bytes, decoded[k].payload, payload_bytes);
 
-    if (recv != NULL && dec != NULL && flat != NULL &&
-        rlnc_decode(&r->cfg, recv, in->count, dec) == 0) {
-        for (size_t i = 0; i < K; ++i)
-            memcpy(flat + i * P, dec[i].payload, P);
-
-        demo_print_bytes("message", flat, K * P);
-        rc = 0;
+        demo_print_bytes("message", generation, K * payload_bytes);
+        result = 0;
     } else {
         printf("decoding failed: the symbols do not span the generation\n");
     }
 
-done:
-    free_packets(dec, K);
-    free(recv);
-    free(flat);
+    free_packets(decoded, K);
+    free(received);
+    free(generation);
 
-    return rc;
+    return result;
 }
 
-static int rlnc_aencode_op(void *handle, const char *message, const char *amessage,
+static int rlnc_aencode_op(void *handle, const char *message, const char *amessage_text,
                            DemoCiphertext *out)
 {
-    Rlnc *r = handle;
-    RandomnessSource rng = linux_randomness();
-    const size_t L = rlnc_amsg_len(&r->cfg, &r->acfg);
-    uint8_t *amsg = calloc(L, 1);
-    rlnc_packet_t *src = make_source(r, message);
-    rlnc_packet_t *syms = alloc_symbols(r);
-    int rc = -1;
+    RlncDemo *demo = handle;
+    RandomnessSource random = linux_randomness();
+    const size_t amessage_length = rlnc_amessage_symbols(&demo->config, &demo->aconfig);
+    uint8_t *amessage = calloc(amessage_length, 1);
+    rlnc_packet_t *source = make_source(demo, message);
+    rlnc_packet_t *symbols = alloc_packets(demo, demo->sent_symbols);
+    int result = -1;
 
-    if (amsg != NULL && src != NULL && syms != NULL &&
-        demo_pad_message(amessage, amsg, L) == 0) {
+    if (amessage != NULL && source != NULL && symbols != NULL &&
+        demo_pad_message(amessage_text, amessage, amessage_length) == 0) {
         /* one GF(q) symbol per byte */
-        for (size_t i = 0; i < L; ++i)
-            amsg[i] &= (uint8_t)(r->cfg.q - 1);
+        for (size_t i = 0; i < amessage_length; ++i)
+            amessage[i] &= (uint8_t)(demo->config.q - 1);
 
-        rc = rlnc_aencode(&r->cfg, &r->acfg, src, syms, r->sent, &rng, r->key, amsg);
+        result = rlnc_aencode(&demo->config, &demo->aconfig, source, symbols,
+                              demo->sent_symbols, &random, demo->key, amessage);
     }
 
-    if (rc == 0)
-        rc = store_symbols(r, syms, out);
+    if (result == 0)
+        result = store_symbols(demo, symbols, out);
 
-    free_packets(src, r->cfg.generation_size);
-    free_packets(syms, r->sent);
-    free(amsg);
+    free_packets(source, demo->config.generation_size);
+    free_packets(symbols, demo->sent_symbols);
+    free(amessage);
 
-    if (rc != 0)
+    if (result != 0)
         fprintf(stderr, "anamorphic encoding failed\n");
 
-    return rc;
+    return result;
 }
 
 static int rlnc_adecode_op(void *handle, const DemoCiphertext *in)
 {
-    Rlnc *r = handle;
-    const size_t L = rlnc_amsg_len(&r->cfg, &r->acfg);
-    uint8_t *amsg = calloc(L, 1);
-    rlnc_packet_t *recv;
-    int rc = -1;
+    RlncDemo *demo = handle;
+    const size_t amessage_length = rlnc_amessage_symbols(&demo->config, &demo->aconfig);
 
-    if (in->bits != 8 * symbol_bytes(r) || in->count < r->acfg.received) {
+    if (in->bits != 8 * symbol_bytes(demo) || in->count < demo->aconfig.received_symbols) {
         fprintf(stderr, "ciphertext does not match the parameters\n");
-        free(amsg);
         return -1;
     }
 
-    recv = view_packets(r, in, in->count);
+    uint8_t *amessage = calloc(amessage_length, 1);
+    rlnc_packet_t *received = view_packets(demo, in);
+    int result = -1;
 
-    if (amsg != NULL && recv != NULL &&
-        rlnc_adecode(&r->cfg, &r->acfg, recv, r->acfg.received, r->key, amsg) == 0) {
-        demo_print_bytes("anamorphic message", amsg, L);
-        rc = 0;
+    if (amessage != NULL && received != NULL &&
+        rlnc_adecode(&demo->config, &demo->aconfig, received, demo->aconfig.received_symbols,
+                     demo->key, amessage) == 0) {
+        demo_print_bytes("anamorphic message", amessage, amessage_length);
+        result = 0;
     } else {
         printf("no anamorphic message\n");
     }
 
-    free(recv);
-    free(amsg);
+    free(received);
+    free(amessage);
 
-    return rc;
+    return result;
 }
 
 /* exported so that the benchmark can use the code without its main */
@@ -299,6 +324,8 @@ const DemoOps demo_rlnc_ops = {
     .decode = rlnc_decode_op,
     .aencode = rlnc_aencode_op,
     .adecode = rlnc_adecode_op,
+    .akeygen = rlnc_akeygen_op,
+    .sample_messages = rlnc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

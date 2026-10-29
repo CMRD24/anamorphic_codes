@@ -26,7 +26,7 @@ typedef struct {
     */
 
     size_t (*encoded_size)(
-        size_t input_length
+        size_t input_len
     );
 
     /*
@@ -67,7 +67,7 @@ typedef struct {
     * Decode
     * ------------------------------------------------------------
     *
-    * Decodes encoded_len bytes from input into output.
+    * Decodes input_len bytes from input into output.
     *
     * output must have enough space for the decoded data.
     *
@@ -92,10 +92,10 @@ typedef struct {
 
 static inline size_t
 ecc_encoded_size(
-    const ECC *ecc, size_t input_length)
+    const ECC *ecc, size_t input_len)
 {
     return ecc->encoded_size(
-        input_length
+        input_len
     );
 }
 

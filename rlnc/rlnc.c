@@ -1,23 +1,36 @@
+/*
+ * Random linear network coding (RLNC) over GF(q), q = 2^m <= 256.
+ *
+ * A generation consists of K source packets w_1..w_K, each a vector of GF(q)
+ * symbols. A coded symbol carries a global encoding vector gamma in GF(q)^K 
+ * and the payload u = sum_k gamma_k w_k. Any node can create new symbols
+ * as random linear combinations of the symbols it holds; the global vector of the
+ * result is the same combination of the global vectors. A receiver that holds K
+ * symbols whose global vectors are linearly independent recovers the generation
+ * by solving a linear system. See T. Ho et al., "A random linear network coding
+ * approach to multicast", IEEE Trans. Inf. Theory 52(10), 2006, and P. A. Chou,
+ * Y. Wu, K. Jain, "Practical network coding", Allerton 2003 (generations and
+ * global encoding vectors in the packets).
+ *
+ * The anamorphic mode is in arlnc.c; it uses rlnc_encode_with_vector below.
+ */
+
 #include "rlnc.h"
 
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 #include "../utils/random_utils.h"
 
 /*
- * Primitive / irreducible polynomials for GF(2^m).
- *
- * The polynomial is represented with the x^m term included.
- *
- * Examples:
- *   GF(2):    x + 1
- *   GF(4):    x^2 + x + 1
- *   GF(8):    x^3 + x + 1
- *   GF(16):   x^4 + x + 1
- *   GF(32):   x^5 + x^2 + 1
- *   GF(64):   x^6 + x + 1
- *   GF(128):  x^7 + x + 1
- *   GF(256):  x^8 + x^4 + x^3 + x^2 + 1
+ * Field polynomial of GF(q) = GF(2)[x] / (f), bit i = coefficient of x^i, with
+ * the x^m term included (0x11D = x^8 + x^4 + x^3 + x^2 + 1, the polynomial of
+ * the usual GF(256) of Reed-Solomon codes.
+ * The polynomials are irreducible, in fact primitive, so x generates the
+ * multiplicative group:
+ *   GF(2): x + 1             GF(4): x^2 + x + 1        GF(8): x^3 + x + 1
+ *   GF(16): x^4 + x + 1      GF(32): x^5 + x^2 + 1     GF(64): x^6 + x + 1
+ *   GF(128): x^7 + x + 1     GF(256): x^8 + x^4 + x^3 + x^2 + 1
  */
 static uint32_t gf_polynomial(uint32_t q)
 {
@@ -34,11 +47,7 @@ static uint32_t gf_polynomial(uint32_t q)
     }
 }
 
-static int is_power_of_two(uint32_t q)
-{
-    return q >= 2 && (q & (q - 1)) == 0;
-}
-
+/* m = log2 q for q = 2^m */
 static unsigned field_bits(uint32_t q)
 {
     unsigned m = 0;
@@ -51,200 +60,188 @@ static unsigned field_bits(uint32_t q)
     return m;
 }
 
-static size_t symbol_count(const rlnc_config_t *cfg)
+/* D: the number of GF(q) symbols of a payload of payload_bytes bytes (m bits each) */
+static size_t payload_symbol_count(const rlnc_config_t *config)
 {
-    const size_t bits = cfg->packet_size * 8;
-    const size_t m = field_bits(cfg->q);
+    const size_t bits = config->payload_bytes * 8;
+    const size_t m = field_bits(config->q);
 
     return (bits + m - 1) / m;
 }
 
 
 /* -------------------------------------------------------------------------
- * GF(2^m)
+ * GF(2^m) by table lookup
+ *
+ * For q <= 256 the full multiplication table has q^2 <= 65536 entries, so every
+ * product is a single lookup (the classic table method for small binary fields,
+ * cf. J. S. Plank, "A tutorial on Reed-Solomon coding for fault-tolerance in
+ * RAID-like systems"). The tables
+ * are built once from logarithm / antilogarithm tables: the field polynomials are
+ * primitive, so every non-zero element is a power x^i of the generator x, and
+ * x^i * x^j = x^((i + j) mod (q - 1)).
  * ------------------------------------------------------------------------- */
 
-static uint32_t gf_add(uint32_t a, uint32_t b)
+static uint8_t *mul_tables[9];        /* storage: [m][a * 2^m + b] = a * b in GF(2^m) */
+static uint8_t inv_tables[9][256];    /* storage: [m][a] = 1 / a (0 for a = 0) */
+static once_flag tables_once = ONCE_FLAG_INIT;
+
+static void build_tables(void)
 {
-    /*
-     * Addition in characteristic 2 is XOR.
-     */
-    return a ^ b;
+    //possible future improvement: only load tables for the specific q (not for all 8 possible choices of q)
+    for (unsigned m = 1; m <= 8; ++m) {
+        const uint32_t q = 1u << m, polynomial = gf_polynomial(q);
+        uint8_t exp[2 * 256], log[256] = {0};
+        uint32_t x = 1;
+
+        /* exp[i] = x^i, log[x^i] = i, by repeated multiplication with x */
+        for (uint32_t i = 0; i < q - 1; ++i) {
+            exp[i] = (uint8_t)x; //store current power
+            log[x] = (uint8_t)i; //store logarithm
+            x <<= 1; //multiply with the polynomial (monomial) "x" 
+            if (x & q)
+                x ^= polynomial; //reduction modulo polynomial
+        }
+        for (uint32_t i = q - 1; i < 2 * (q - 1); ++i)
+            exp[i] = exp[i - (q - 1)]; //because the multiplicative group has q-1 elements x^(q-1)=x^0=1
+
+        //build the table for the specific m resp. q
+        mul_tables[m] = calloc(q * q, 1);
+        if (mul_tables[m] == NULL)
+            abort();
+
+        for (uint32_t a = 1; a < q; ++a) {
+            for (uint32_t b = 1; b < q; ++b)
+                mul_tables[m][a * q + b] = exp[log[a] + log[b]]; //x^i * x^j = x^((i + j) mod (q - 1))
+
+            inv_tables[m][a] = exp[(q - 1 - log[a]) % (q - 1)]; //a:=x^i -> x^-i = x^(q-1)-i
+        }
+    }
 }
 
-static uint32_t gf_mul(
-    uint32_t a,
-    uint32_t b,
-    uint32_t q)
+/* row a of the multiplication table: row[b] = a * b */
+static const uint8_t *gf_mul_row(uint32_t a, uint32_t q)
 {
-    const unsigned m = field_bits(q);
-    const uint32_t polynomial = gf_polynomial(q);
+    call_once(&tables_once, build_tables);
 
-    uint32_t result = 0;
-
-    /*
-     * Russian-peasant multiplication in GF(2^m).
-     */
-    for (unsigned i = 0; i < m; ++i) {
-        if (b & 1u)
-            result ^= a;
-
-        b >>= 1;
-
-        const uint32_t carry = a & (1u << (m - 1));
-
-        a <<= 1;
-
-        if (carry)
-            a ^= polynomial;
-    }
-
-    return result & (q - 1);
-}
-
-static uint32_t gf_pow(
-    uint32_t a,
-    uint32_t exponent,
-    uint32_t q)
-{
-    uint32_t result = 1;
-
-    while (exponent != 0) {
-        if (exponent & 1u)
-            result = gf_mul(result, a, q);
-
-        a = gf_mul(a, a, q);
-        exponent >>= 1;
-    }
-
-    return result;
+    return mul_tables[field_bits(q)] + a * q;
 }
 
 static uint32_t gf_inv(uint32_t a, uint32_t q)
 {
+    call_once(&tables_once, build_tables);
+
+    return inv_tables[field_bits(q)][a];
+}
+
+/* dst[i] += a * src[i] over GF(q) (the row operation of encoding and elimination) */
+static void gf_axpy(uint8_t *dst, const uint8_t *src, size_t len, uint32_t a, uint32_t q)
+{
     if (a == 0)
-        return 0;
+        return;
 
-    /*
-     * In GF(q), a^(q-1) = 1 for a != 0,
-     * hence a^(-1) = a^(q-2).
-     */
-    return gf_pow(a, q - 2, q);
+    if (a == 1) {
+        for (size_t i = 0; i < len; ++i)
+            dst[i] ^= src[i];
+        return;
+    }
+
+    const uint8_t *mul = gf_mul_row(a, q);
+
+    for (size_t i = 0; i < len; ++i)
+        dst[i] ^= mul[src[i]];
+}
+
+/* v[i] = a * v[i] over GF(q) */
+static void gf_scale(uint8_t *v, size_t len, uint32_t a, uint32_t q)
+{
+    const uint8_t *mul = gf_mul_row(a, q);
+
+    for (size_t i = 0; i < len; ++i)
+        v[i] = mul[v[i]];
 }
 
 
 /* -------------------------------------------------------------------------
- * Packing/unpacking arbitrary bytes into GF(q) symbols
+ * Payloads as GF(q) symbols
+ *
+ * A payload is a continuous little-endian bit stream (byte 0: b0 b1 b2 ...)
+ * cut into symbols of m bits. For m < 8 the arithmetic works on the unpacked
+ * symbols, one per byte.
  * ------------------------------------------------------------------------- */
 
-/*
- * Extract symbol number `index` from a byte array.
- *
- * The byte array is interpreted as a continuous little-endian bit stream:
- *
- *   byte 0: b0 b1 b2 ...
- *
- * The exact bit ordering does not matter for RLNC as long as encoding
- * and decoding use the same representation.
- */
-static uint32_t get_symbol(
-    const uint8_t *data,
-    size_t index,
-    unsigned m)
+static uint32_t get_symbol(const uint8_t *payload, size_t index, unsigned m)
+{
+    const size_t bit_offset = index * m;
+    const size_t byte_offset = bit_offset / 8;
+    const unsigned shift = bit_offset % 8;
+    uint32_t value = payload[byte_offset] >> shift;
+
+    if (shift + m > 8) //reaches into next byte of payload
+        value |= (uint32_t)payload[byte_offset + 1] << (8 - shift);
+
+    return value & ((1u << m) - 1u); //mask to set MSBs to 0 (so only value in 2^m is returned)
+}
+
+/* writes symbol `index`; IMPORTANT: the payload must be zeroed */
+static void set_symbol(uint8_t *payload, size_t index, unsigned m, uint32_t value)
 {
     const size_t bit_offset = index * m;
     const size_t byte_offset = bit_offset / 8;
     const unsigned shift = bit_offset % 8;
 
-    uint32_t value = data[byte_offset] >> shift;
+    value &= (1u << m) - 1u; //mask value, e.g. with 0000 1111 for m=4
+    payload[byte_offset] |= (uint8_t)(value << shift); //need to correct by shift to hit exactly the right symbol
 
-    if (shift + m > 8) {
-        value |= (uint32_t)data[byte_offset + 1] << (8 - shift);
-    }
-
-    return value & ((1u << m) - 1u);
+    /* the symbol crosses a byte boundary */
+    if (shift + m > 8)
+        payload[byte_offset + 1] |= (uint8_t)(value >> (8 - shift)); //need to only take the highest bits of value for the next byte
 }
 
-
-/*
- * Write a GF(q) symbol into the byte array.
- *
- * The destination must have been zero-initialized before writing.
- */
-static void set_symbol(
-    uint8_t *data,
-    size_t index,
-    unsigned m,
-    uint32_t value)
+static void unpack_symbols(const uint8_t *payload, unsigned m, size_t count, uint8_t *symbols)
 {
-    const size_t bit_offset = index * m;
-    const size_t byte_offset = bit_offset / 8;
-    const unsigned shift = bit_offset % 8;
-    const uint32_t mask = (1u << m) - 1u;
-
-    value &= mask;
-
-    /*
-     * First part.
-     */
-    data[byte_offset] |= (uint8_t)(value << shift);
-
-    /*
-     * If the symbol crosses a byte boundary, write the remaining bits.
-     */
-    if (shift + m > 8) {
-        data[byte_offset + 1] |=
-            (uint8_t)(value >> (8 - shift));
+    if (m == 8) {
+        memcpy(symbols, payload, count);
+        return;
     }
+
+    for (size_t i = 0; i < count; ++i)
+        symbols[i] = (uint8_t)get_symbol(payload, i, m);
+}
+
+/* inverse of unpack_symbols; payload must be zeroed */
+static void pack_symbols(const uint8_t *symbols, unsigned m, size_t count, uint8_t *payload)
+{
+    if (m == 8) {
+        memcpy(payload, symbols, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+        set_symbol(payload, i, m, symbols[i]);
 }
 
 
 /* -------------------------------------------------------------------------
- * Configuration / packet management
+ * Configuration / packets
  * ------------------------------------------------------------------------- */
 
-int rlnc_config_valid(const rlnc_config_t *cfg)
+int rlnc_config_valid(const rlnc_config_t *config)
 {
-    if (cfg == NULL)
-        return 0;
-
-    /*
-     * XOR addition is only possible for fields of characteristic 2.
-     *
-     * Therefore q must be 2^m.
-     */
-    if (!is_power_of_two(cfg->q))
-        return 0;
-
-    /*
-     * This implementation currently supports GF(2^m), m <= 8.
-     */
-    if (cfg->q > 256)
-        return 0;
-
-    if (gf_polynomial(cfg->q) == 0)
-        return 0;
-
-    if (cfg->packet_size == 0)
-        return 0;
-
-    if (cfg->generation_size == 0)
-        return 0;
-
-    return 1;
+    /* the arithmetic is that of GF(2^m), m <= 8 */
+    return config != NULL && gf_polynomial(config->q) != 0 &&
+           config->payload_bytes > 0 && config->generation_size > 0;
 }
 
-int rlnc_packet_alloc(
-    const rlnc_config_t *cfg,
-    rlnc_packet_t *packet)
+int rlnc_packet_alloc(const rlnc_config_t *config, rlnc_packet_t *packet)
 {
-    if (!rlnc_config_valid(cfg) || packet == NULL)
+    if (!rlnc_config_valid(config) || packet == NULL)
         return -1;
 
-    packet->payload = calloc(cfg->packet_size, sizeof(uint8_t));
-    packet->global = calloc(cfg->generation_size, sizeof(uint8_t));
+    packet->payload = calloc(config->payload_bytes, 1);
+    packet->global_vector = calloc(config->generation_size, 1);
 
-    if (packet->payload == NULL || packet->global == NULL) {
+    if (packet->payload == NULL || packet->global_vector == NULL) {
         rlnc_packet_free(packet);
         return -1;
     }
@@ -258,10 +255,10 @@ void rlnc_packet_free(rlnc_packet_t *packet)
         return;
 
     free(packet->payload);
-    free(packet->global);
+    free(packet->global_vector);
 
     packet->payload = NULL;
-    packet->global = NULL;
+    packet->global_vector = NULL;
 }
 
 
@@ -269,183 +266,94 @@ void rlnc_packet_free(rlnc_packet_t *packet)
  * Encoding
  * ------------------------------------------------------------------------- */
 
-
- int rlnc_sample_local_encoding_vector(
-    const rlnc_config_t *cfg,
-    size_t input_count,
-    RandomnessSource *rng,
-    uint8_t *local_vector)
-{
-    if (!rlnc_config_valid(cfg) ||
-        input_count == 0 ||
-        rng == NULL ||
-        local_vector == NULL)
-        return -1;
-
-    for (size_t i = 0; i < input_count; ++i) {
-        local_vector[i] =
-            (uint8_t)random_bounded(rng, cfg->q);
-    }
-
-    return 0;
-}
-
-
+/*
+ * Creates one coded symbol as the linear combination
+ *     out = sum_j alpha_j * packets[j]
+ * of the input symbols with the local coefficients alpha = local_vector, applied
+ * both to the global encoding vectors and to the payloads (a matrix-vector product
+ * over GF(q)). If the inputs are the source packets (global vectors e_1..e_K), the
+ * global vector of the output is alpha itself. The anamorphic encoder uses this
+ * with a chosen alpha.
+ */
 int rlnc_encode_with_vector(
-    const rlnc_config_t *cfg,
+    const rlnc_config_t *config,
     const rlnc_packet_t *packets,
     size_t packet_count,
     const uint8_t *local_vector,
     rlnc_packet_t *out)
 {
-    if (!rlnc_config_valid(cfg) ||
-        packets == NULL ||
-        local_vector == NULL ||
-        out == NULL)
+    if (!rlnc_config_valid(config) || packets == NULL || local_vector == NULL ||
+        out == NULL || packet_count == 0)
         return -1;
 
-    if (packet_count == 0)
-        return -1;
+    const unsigned m = field_bits(config->q);
+    const size_t symbol_count = payload_symbol_count(config);
+    uint8_t *combination = NULL, *unpacked = NULL;
 
-    const unsigned m = field_bits(cfg->q);
-    const size_t symbols = symbol_count(cfg);
+    //out must already be allocated (by convention) and zeroed
+    memset(out->payload, 0, config->payload_bytes);
+    memset(out->global_vector, 0, config->generation_size);
 
-    memset(out->payload, 0, cfg->packet_size);
-    memset(out->global, 0, cfg->generation_size);
+    /* symbols of fewer than 8 bits are combined unpacked, one per byte */
+    if (m != 8) {
+        combination = calloc(symbol_count, 1);
+        unpacked = malloc(symbol_count);
 
-    /*
-     * Accumulate the coded payload as GF(q) symbols.
-     *
-     * We cannot accumulate directly into the byte array because
-     * GF(q) symbols may cross byte boundaries when m does not
-     * divide 8.
-     */
-    uint32_t *coded_symbols =
-        calloc(symbols, sizeof(uint32_t));
+        if (combination == NULL || unpacked == NULL) {
+            free(combination);
+            free(unpacked);
+            return -1;
+        }
+    }
 
-    if (coded_symbols == NULL)
-        return -1;
-
-    /*
-     * u' = sum_j alpha_j * u_j
-     *
-     * gamma' = sum_j alpha_j * gamma_j
-     */
+    /* gamma' = sum_j alpha_j gamma_j,  u' = sum_j alpha_j u_j */
     for (size_t j = 0; j < packet_count; ++j) {
         const uint32_t alpha = local_vector[j];
 
-        /*
-         * Compute the global encoding vector:
-         *
-         * gamma' = sum_j alpha_j * gamma_j
-         */
-        for (size_t k = 0; k < cfg->generation_size; ++k) {
-            const uint32_t product =
-                gf_mul(
-                    alpha,
-                    packets[j].global[k],
-                    cfg->q);
+        gf_axpy(out->global_vector, packets[j].global_vector, config->generation_size,
+                alpha, config->q); //update out->global_vector in each iteration
 
-            out->global[k] =
-                (uint8_t)gf_add(
-                    out->global[k],
-                    product);
-        }
-
-        /*
-         * Compute the coded payload:
-         *
-         * u' = sum_j alpha_j * u_j
-         */
-        for (size_t i = 0; i < symbols; ++i) {
-            const uint32_t value =
-                get_symbol(
-                    packets[j].payload,
-                    i,
-                    m);
-
-            const uint32_t product =
-                gf_mul(
-                    alpha,
-                    value,
-                    cfg->q);
-
-            coded_symbols[i] =
-                gf_add(
-                    coded_symbols[i],
-                    product);
-        }
+        if (m == 8) {
+            gf_axpy(out->payload, packets[j].payload, config->payload_bytes, alpha, config->q);
+        } else {
+            unpack_symbols(packets[j].payload, m, symbol_count, unpacked);
+            gf_axpy(combination, unpacked, symbol_count, alpha, config->q);
+        } //same for the xor-ed payload
     }
 
-    /*
-     * Pack the resulting GF(q) symbols back into bytes.
-     */
-    for (size_t i = 0; i < symbols; ++i) {
-        set_symbol(
-            out->payload,
-            i,
-            m,
-            coded_symbols[i]);
-    }
+    if (m != 8)
+        pack_symbols(combination, m, symbol_count, out->payload);
 
-    free(coded_symbols);
+    free(combination);
+    free(unpacked);
 
     return 0;
 }
 
-
+/*
+ * Creates one coded symbol with a fresh local encoding vector: one uniform GF(q)
+ * coefficient for every packet available to this node.
+ */
 int rlnc_encode(
-    const rlnc_config_t *cfg,
+    const rlnc_config_t *config,
     const rlnc_packet_t *packets,
     size_t packet_count,
     rlnc_packet_t *out,
-    RandomnessSource *rng)
+    RandomnessSource *random)
 {
-    if (!rlnc_config_valid(cfg) ||
-        packets == NULL ||
-        out == NULL ||
-        rng == NULL)
+    if (!rlnc_config_valid(config) || packets == NULL || out == NULL || random == NULL ||
+        packet_count == 0)
         return -1;
 
-    if (packet_count == 0)
-        return -1;
-
-    /*
-     * The local encoding vector belongs to this node and therefore
-     * has one coefficient for every packet available to this node.
-     */
-    uint8_t *local_vector =
-        malloc(packet_count * sizeof(uint8_t));
+    uint8_t *local_vector = malloc(packet_count);
 
     if (local_vector == NULL)
         return -1;
 
-    /*
-     * Sample the local encoding vector.
-     */
-    if (rlnc_sample_local_encoding_vector(
-            cfg,
-            packet_count,
-            rng,
-            local_vector) != 0) {
+    for (size_t j = 0; j < packet_count; ++j)
+        local_vector[j] = (uint8_t)random_bounded(random, config->q);
 
-        free(local_vector);
-        return -1;
-    }
-
-    /*
-     * Encode using the sampled local encoding vector.
-     *
-     * rlnc_encode_with_vector() derives the outgoing global
-     * encoding vector from the incoming global vectors.
-     */
-    const int result =
-        rlnc_encode_with_vector(
-            cfg,
-            packets,
-            packet_count,
-            local_vector,
-            out);
+    const int result = rlnc_encode_with_vector(config, packets, packet_count, local_vector, out);
 
     free(local_vector);
 
@@ -457,146 +365,88 @@ int rlnc_encode(
  * Decoding
  * ------------------------------------------------------------------------- */
 
-
+/*
+ * Recovers the K source packets from received symbols (at least K).
+ *
+ * Solves the linear system [gamma_j | u_j] over GF(q) by Gauss-Jordan elimination
+ * on the augmented matrix whose rows are the received global vectors followed by
+ * the payload symbols: for each column find a row with a non-zero entry, normalise
+ * it with the inverse of the pivot, and eliminate the column from all other rows.
+ * When the left part is the identity the right part holds w_1..w_K. All received
+ * rows are used, so a surplus of symbols compensates for dependent ones. Returns
+ * -1 if the global vectors do not have rank K.
+ */
 int rlnc_decode(
-    const rlnc_config_t *cfg,
+    const rlnc_config_t *config,
     const rlnc_packet_t *received,
     size_t received_count,
     rlnc_packet_t *out)
 {
-    if (!rlnc_config_valid(cfg) ||
-        received == NULL ||
-        out == NULL)
+    if (!rlnc_config_valid(config) || received == NULL || out == NULL ||
+        received_count < config->generation_size)
         return -1;
 
-    if (received_count < cfg->generation_size)
-        return -1;
-
-    const size_t K = cfg->generation_size;
-    const size_t R = received_count;
-    const unsigned m = field_bits(cfg->q);
-    const size_t symbols = symbol_count(cfg);
+    const size_t K = config->generation_size;
+    const unsigned m = field_bits(config->q);
+    const size_t symbol_count = payload_symbol_count(config);
+    const size_t width = K + symbol_count;
+    int result = -1;
 
     /*
-     * Work on all received packets: the first K need not be independent.
-     *
-     * Each row consists of:
-     *
-     *     [ global vector | payload symbols ]
+     * Augmented matrix, one row per received packet (all of them: the first K
+     * need not be independent): [ global vector | payload symbols ], one GF(q)
+     * element per byte.
      */
-    uint32_t **matrix =
-        calloc(R, sizeof(uint32_t *));
+    uint8_t *matrix = malloc(received_count * width);
+    uint8_t **rows = malloc(received_count * sizeof(*rows));
 
-    if (matrix == NULL)
-        return -1;
+    if (matrix == NULL || rows == NULL)
+        goto done;
 
-    for (size_t r = 0; r < R; ++r) {
-        matrix[r] =
-            calloc(K + symbols, sizeof(uint32_t));
-
-        if (matrix[r] == NULL) {
-            for (size_t i = 0; i < r; ++i)
-                free(matrix[i]);
-
-            free(matrix);
-            return -1;
-        }
-
-        /*
-         * Global encoding vector.
-         */
-        for (size_t c = 0; c < K; ++c)
-            matrix[r][c] = received[r].global[c];
-
-        /*
-         * Payload represented as GF(q) symbols.
-         */
-        for (size_t i = 0; i < symbols; ++i)
-            matrix[r][K + i] =
-                get_symbol(received[r].payload, i, m);
+    for (size_t r = 0; r < received_count; ++r) {
+        rows[r] = matrix + r * width; //offset into the matrix
+        memcpy(rows[r], received[r].global_vector, K); //copy global encoding vector into first part of the row
+        unpack_symbols(received[r].payload, m, symbol_count, rows[r] + K); //write symbols into second part of the row
     }
 
-    /*
-     * Gauss-Jordan elimination.
-     *
-     * We never swap columns. Instead, we search for a row containing
-     * a non-zero value in the current pivot column and swap rows.
-     */
+    /* Gauss-Jordan elimination; rows are swapped, columns never */
     for (size_t col = 0; col < K; ++col) {
         size_t pivot = col;
 
-        while (pivot < R && matrix[pivot][col] == 0)
+        while (pivot < received_count && rows[pivot][col] == 0) //choose the first row for which the column entry is not 0
             ++pivot;
 
-        if (pivot == R) {
-            /*
-             * The received global vectors are not linearly independent.
-             */
-            for (size_t i = 0; i < R; ++i)
-                free(matrix[i]);
+        if (pivot == received_count)
+            goto done;      /* the global vectors do not have rank K */
 
-            free(matrix);
-            return -1;
-        }
+        uint8_t *swap = rows[col];
+        rows[col] = rows[pivot];
+        rows[pivot] = swap; //by swapping to the col position the sub-matrix with the encoding vectors becomes an identity matrix
 
-        if (pivot != col) {
-            uint32_t *tmp = matrix[col];
-            matrix[col] = matrix[pivot];
-            matrix[pivot] = tmp;
-        }
+        /* normalise the pivot to 1 */
+        gf_scale(rows[col] + col, width - col, gf_inv(rows[col][col], config->q), config->q); //only starting at rows[col] + col because the values before it in the row are already 0 (nothing to scale)
 
-        /*
-         * Normalize pivot to 1.
-         */
-        const uint32_t inverse =
-            gf_inv(matrix[col][col], cfg->q);
-
-        for (size_t j = col; j < K + symbols; ++j) {
-            matrix[col][j] =
-                gf_mul(matrix[col][j], inverse, cfg->q);
-        }
-
-        /*
-         * Eliminate this column from all other rows.
-         */
-        for (size_t row = 0; row < R; ++row) {
-            if (row == col)
-                continue;
-
-            const uint32_t factor = matrix[row][col];
-
-            if (factor == 0)
-                continue;
-
-            for (size_t j = col; j < K + symbols; ++j) {
-                const uint32_t product =
-                    gf_mul(factor, matrix[col][j], cfg->q);
-
-                matrix[row][j] =
-                    gf_add(matrix[row][j], product);
-            }
+        /* eliminate the column from all other rows */
+        for (size_t r = 0; r < received_count; ++r) {
+            if (r != col && rows[r][col] != 0)
+                gf_axpy(rows[r] + col, rows[col] + col, width - col, rows[r][col], config->q);
         }
     }
 
-    for (size_t row = 0; row < K; ++row) {
-    memset(out[row].payload, 0, cfg->packet_size);
+    /* row k now reads [ e_k | w_k ] */
+    for (size_t k = 0; k < K; ++k) {
+        memset(out[k].payload, 0, config->payload_bytes);
+        pack_symbols(rows[k] + K, m, symbol_count, out[k].payload);
 
-    for (size_t i = 0; i < symbols; ++i) {
-        set_symbol(
-            out[row].payload,
-            i,
-            m,
-            matrix[row][K + i]);
+        memset(out[k].global_vector, 0, K);
+        out[k].global_vector[k] = 1; //set the global encoding vector accordingly (only 1 at position k)
     }
 
-    memset(out[row].global, 0, K);
-    out[row].global[row] = 1;
-    }
+    result = 0;
 
-    for (size_t i = 0; i < R; ++i)
-        free(matrix[i]);
-
+done:
+    free(rows);
     free(matrix);
 
-    return 0;
+    return result;
 }

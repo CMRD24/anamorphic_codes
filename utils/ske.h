@@ -10,13 +10,13 @@
  * Ciphertext layout:
  *   nonce || (PRF(key, nonce) XOR message)
  *
- * The ciphertext buffer must have at least
- * nonce_len + message_len bytes. The key is a libsodium generichash key
- * (crypto_generichash_KEYBYTES bytes).
+ * The ciphertext buffer must have at least nonce_len + message_len bytes, with
+ * message_len <= 64 (the output length of BLAKE2b). The key is a libsodium
+ * generichash key (crypto_generichash_KEYBYTES bytes). The nonce is uniform.
  *
  * Returns 0 on success, -1 on error.
  */
-int encrypt(
+int ske_encrypt(
     const uint8_t *key,
     size_t nonce_len,
     const uint8_t *message,
@@ -25,7 +25,7 @@ int encrypt(
 );
 
 /*
- * Decrypt a ciphertext produced by encrypt().
+ * Decrypt a ciphertext produced by ske_encrypt().
  *
  * message_len must be supplied separately because the ciphertext
  * does not encode the actual message length. The ciphertext buffer must
@@ -33,7 +33,7 @@ int encrypt(
  *
  * Returns 0 on success, -1 on error.
  */
-int decrypt(
+int ske_decrypt(
     const uint8_t *key,
     size_t nonce_len,
     const uint8_t *ciphertext,
@@ -43,7 +43,7 @@ int decrypt(
 
 /*
  * First bit of a keyed hash of input; used for the indication bits of the
- * randomness-recovery based anamorphic PRCs.
+ * randomness-recovery based anamorphic PRCs. (OPTIONAL: indications could be used for more efficient anamorphic decoding (receiver knows when to decrypt))
  */
 uint8_t ske_prf_bit(
     const uint8_t *key,

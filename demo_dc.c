@@ -5,8 +5,8 @@
 #include "prcs/zerobit/implementations/prc_dc.h"
 
 static const DemoParamSpec specs[] = {
-    DEMO_LDPC_SPECS("128", "64", "32", "4", "0.01"),
-    {"T", "211", "bits per underlying codeword bit"},
+    DEMO_LDPC_SPECS_SMALL,
+    {"slice_bits", "211", "bits per underlying codeword bit"},
     {NULL, NULL, NULL}
 };
 
@@ -18,30 +18,33 @@ typedef struct {
 
 static void *dc_open(const DemoParams *params, const DemoKeys *keys)
 {
-    DemoPrc *p = demo_prc_new(sizeof(Storage));
-    Storage *s;
+    DemoPrc *prc = demo_prc_new(sizeof(Storage));
 
-    if (p == NULL)
+    if (prc == NULL)
         return NULL;
 
-    s = p->storage;
-    s->ldpc = demo_ldpc_params(params);
-    s->underlying = prc_ldpc(&s->ldpc);
-    s->dc = (PRCDC_Params){
-        .k = s->ldpc.n,
-        .T = demo_param_size(params, "T"),
-        .underlying = &s->underlying,
-    };
+    Storage *storage = prc->storage;
 
-    p->zerobit = 1;
-    p->zb = prc_dc(&s->dc);
-
-    if (demo_prc_finish(p, keys) != 0) {
-        demo_prc_close(p);
+    if (demo_ldpc_params(params, &storage->ldpc, NULL) != 0) {
+        demo_prc_close(prc);
         return NULL;
     }
 
-    return p;
+    storage->underlying = prc_ldpc(&storage->ldpc);
+    storage->dc = (PRCDC_Params){
+        .slice_bits = demo_param_size(params, "slice_bits"),
+        .underlying = &storage->underlying,
+    };
+
+    prc->zerobit = 1;
+    prc->zerobit_prc = prc_dc(&storage->dc);
+
+    if (demo_prc_finish(prc, keys) != 0) {
+        demo_prc_close(prc);
+        return NULL;
+    }
+
+    return prc;
 }
 
 /* exported so that the benchmark can use the code without its main */
@@ -54,6 +57,7 @@ const DemoOps demo_dc_ops = {
     .close = demo_prc_close,
     .encode = demo_prc_encode,
     .decode = demo_prc_decode,
+    .sample_messages = demo_prc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

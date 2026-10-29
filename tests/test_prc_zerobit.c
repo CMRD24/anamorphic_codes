@@ -11,16 +11,56 @@
 static RandomnessSource rng;
 
 /*
- * r' = g/2 parity checks decide anamorphic acceptance, so g must be large
- * enough for the threshold (1/2 - r'^(-1/4)) r' to separate the noise.
+ * The admissible choice of the thesis with n^epsilon = 2^12: r = r' = 64,
+ * kappa = 4096, g = 4160, t = floor(log2(n) / 4) = 3 (the demos of the nested PRCs
+ * use the same instance).
  */
-static const LDPCParams ldpc_params = {
-    .n = 1024, .r = 256, .g = 512, .t = 10, .eta = 0.01};
+static LDPCParams ldpc_params;
+static A_LDPCParams ldpc_aparams;
 
-static const A_LDPCParams ldpc_aparams = {.g_prime = 174};
+#define LDPC_N 16384
+#define LDPC_EPSILON (6.0 / 7.0)
+#define LDPC_DELTA 0.25
+#define LDPC_ETA 0.005
 
 #define TRIALS 20
 #define BSC_P 0.003
+
+/* ------------------------------------------------------------------ */
+/* parameters                                                          */
+/* ------------------------------------------------------------------ */
+
+static void test_ldpc_admissible_choice(void)
+{
+    LDPCParams params;
+    A_LDPCParams aparams;
+
+    /* the defaults of the LDPC demo: n = 2^16, epsilon = 3/4 */
+    CHECK(ldpc_admissible_choice(65536, 0.75, 0.25, 0.005, &params, &aparams) == 0);
+    CHECK(params.n == 65536 && params.r == 64 && params.g == 4160 && params.t == 4);
+    CHECK(aparams.r_prime == 64 && params.g - aparams.r_prime == 4096);
+    CHECK(ldpc_check_requirements(&params, &aparams, 0.75) == 0);
+
+    CHECK(ldpc_params.r == 64 && ldpc_params.g == 4160 && ldpc_params.t == 3);
+    CHECK(ldpc_check_requirements(&ldpc_params, &ldpc_aparams, LDPC_EPSILON) == 0);
+
+    /* r = 14: the decoding threshold is negative */
+    CHECK(ldpc_admissible_choice(1024, 0.75, 0.25, 0.005, &params, &aparams) == 0);
+    CHECK(ldpc_check_requirements(&params, &aparams, 0.75) != 0);
+
+    /* (R4): g + r = 1015 > n - log2(n)^2 */
+    CHECK(ldpc_admissible_choice(1024, 0.99, 0.25, 0.005, &params, &aparams) == 0);
+    CHECK(ldpc_check_requirements(&params, &aparams, 0.99) != 0);
+
+    /* (R3): r' >= g */
+    aparams = ldpc_aparams;
+    aparams.r_prime = ldpc_params.g;
+    CHECK(ldpc_check_requirements(&ldpc_params, &aparams, LDPC_EPSILON) != 0);
+
+    /* out of range */
+    CHECK(ldpc_admissible_choice(65536, 1.0, 0.25, 0.005, &params, &aparams) != 0);
+    CHECK(ldpc_admissible_choice(65536, 0.75, 0.25, 0.5, &params, &aparams) != 0);
+}
 
 /* ------------------------------------------------------------------ */
 /* regular zero-bit PRCs                                               */
@@ -32,7 +72,7 @@ static void zb_regular_suite(const ZBPRC *prc, double p, int expect_noise_ok)
     CHECK(keys != NULL);
     if (keys == NULL) return;
 
-    size_t n = zbprc_blocksize(prc);
+    size_t n = zbprc_block_length(prc);
     CHECK(n > 0);
 
     int accepted = 0, noisy_accepted = 0, random_accepted = 0;
@@ -52,9 +92,9 @@ static void zb_regular_suite(const ZBPRC *prc, double p, int expect_noise_ok)
         }
         free(c);
 
-        uint8_t *r = test_random_bits(bits, &rng);
-        random_accepted += zbprc_decode(prc, keys->dec, r, bits) == 1;
-        free(r);
+        uint8_t *random_string = test_random_bits(bits, &rng);
+        random_accepted += zbprc_decode(prc, keys->dec, random_string, bits) == 1;
+        free(random_string);
     }
 
     CHECK_MSG(accepted == TRIALS, "accepted %d/%d codewords", accepted, TRIALS);
@@ -83,8 +123,8 @@ static void test_ldpc_regular(void)
 static void test_pp_regular(void)
 {
     ECC ecc = hamming74_ecc();
-    PPParams params = {.delta = 0.0, .ecc = &ecc, .n = 16 * 8, .q = 2,
-                       .message_bytes = 8, .symbol_bits = 1};
+    PPParams params = {.ecc = &ecc, .seed_bytes = 8, .q = 2, .symbol_bits = 1,
+                       .n = 16 * 8, .delta = 0.0};
     ZBPRC_RR rr = prc_pp_rr(&params);
     zb_regular_suite(&rr.base, 0, 0);
 }
@@ -92,23 +132,23 @@ static void test_pp_regular(void)
 static void test_pp_seed_recovery(void)
 {
     ECC ecc = hamming74_ecc();
-    PPParams params = {.delta = 0.0, .ecc = &ecc, .n = 16 * 8, .q = 2,
-                       .message_bytes = 8, .symbol_bits = 1};
+    PPParams params = {.ecc = &ecc, .seed_bytes = 8, .q = 2, .symbol_bits = 1,
+                       .n = 16 * 8, .delta = 0.0};
     ZBPRC_RR rr = prc_pp_rr(&params);
     ZBPRC_Keys *keys = zbprc_keygen(&rr.base, &rng);
     CHECK(keys != NULL);
 
     for (int t = 0; t < TRIALS; ++t) {
-        uint8_t seed[8], back[8] = {0};
+        uint8_t seed[8], recovered[8] = {0};
         rng.rng(rng.ctx, seed, sizeof seed);
 
         size_t bits = 0;
-        uint8_t *c = rr.encode_ws(rr.base.params, keys->enc, &rng, &bits, seed);
+        uint8_t *c = rr.encode_with_seed(rr.base.params, keys->enc, &rng, &bits, seed);
         CHECK(c != NULL);
         if (c == NULL) continue;
 
-        CHECK(rr.decode_ws(rr.base.params, keys->dec, c, bits, back) == 1);
-        CHECK(memcmp(seed, back, sizeof seed) == 0);
+        CHECK(rr.recover_decode(rr.base.params, keys->dec, c, bits, recovered) == 1);
+        CHECK(memcmp(seed, recovered, sizeof seed) == 0);
         CHECK(zbprc_decode(&rr.base, keys->dec, c, bits) == 1);
         free(c);
     }
@@ -117,14 +157,15 @@ static void test_pp_seed_recovery(void)
 
 static void test_dc_regular(void)
 {
-    static const LDPCParams dc_ldpc = {.n = 128, .r = 64, .g = 32, .t = 4, .eta = 0.01};
-    ZBPRC underlying = prc_ldpc(&dc_ldpc);
-    PRCDC_Params dcp = {.k = dc_ldpc.n, .T = 211, .underlying = &underlying};
-    ZBPRC prc = prc_dc(&dcp);
+    ZBPRC underlying = prc_ldpc(&ldpc_params);
+    PRCDC_Params dc_params = {.slice_bits = 15, .underlying = &underlying};
+    ZBPRC prc = prc_dc(&dc_params);
 
     ZBPRC_Keys *keys = zbprc_keygen(&prc, &rng);
     CHECK(keys != NULL);
     if (keys == NULL) return;
+
+    CHECK(zbprc_block_length(&prc) == 15 * ldpc_params.n);
 
     int accepted = 0, random_accepted = 0;
     for (int t = 0; t < 10; ++t) {
@@ -135,12 +176,11 @@ static void test_dc_regular(void)
         accepted += zbprc_decode(&prc, keys->dec, c, bits) == 1;
         free(c);
 
-        uint8_t *r = test_random_bits(bits, &rng);
-        random_accepted += zbprc_decode(&prc, keys->dec, r, bits) == 1;
-        free(r);
+        uint8_t *random_string = test_random_bits(bits, &rng);
+        random_accepted += zbprc_decode(&prc, keys->dec, random_string, bits) == 1;
+        free(random_string);
     }
-    /* the tiny underlying LDPC parameters reject about 2% of the codewords */
-    CHECK_MSG(accepted >= 8, "accepted %d/10", accepted);
+    CHECK_MSG(accepted == 10, "accepted %d/10", accepted);
     CHECK(random_accepted == 0);
     zbprc_free_keys(&prc, keys);
 }
@@ -156,57 +196,59 @@ static void test_ldpc_anamorphic(void)
 
     ZBPRC_Keys *keys = zbprc_keygen(&prc, &rng);
     CHECK(keys != NULL);
-    APRC_Keys *ak = zbprc_akeygen(&prc, &aprc, keys, &rng);
-    CHECK(ak != NULL);
-    APRC_Keys *ak2 = zbprc_akeygen(&prc, &aprc, keys, &rng);
-    CHECK(ak2 != NULL);
-    if (!keys || !ak || !ak2) return;
+    AZBPRC_Keys *akeys = zbprc_akeygen(&prc, &aprc, keys, &rng);
+    CHECK(akeys != NULL);
+    AZBPRC_Keys *other_akeys = zbprc_akeygen(&prc, &aprc, keys, &rng);
+    CHECK(other_akeys != NULL);
+    if (!keys || !akeys || !other_akeys) return;
 
-    int a_acc = 0, a_noisy = 0, a_regdec = 0;
-    int reg_in_adec = 0, rand_in_adec = 0, wrongkey_adec = 0;
+    int accepted = 0, noisy_accepted = 0, regular_decoded = 0;
+    int regular_accepted = 0, random_accepted = 0, other_key_accepted = 0;
 
     for (int t = 0; t < TRIALS; ++t) {
         size_t bits = 0;
-        uint8_t *c = zbprc_aencode(&prc, &aprc, keys->enc, ak->enc, &rng, &bits);
+        uint8_t *c = zbprc_aencode(&prc, &aprc, keys->enc, akeys->double_key, &rng, &bits);
         CHECK(c != NULL);
         if (c == NULL) continue;
         CHECK(bits == ldpc_params.n);
 
         /* noiseless and through the BSC */
-        a_acc += zbprc_adecode(&prc, &aprc, keys->dec, ak->dec, c, bits) == 1;
+        accepted += zbprc_adecode(&prc, &aprc, keys->dec, akeys->trapdoor_key, c, bits) == 1;
         /* preservation of the regular functionality */
-        a_regdec += zbprc_decode(&prc, keys->dec, c, bits) == 1;
+        regular_decoded += zbprc_decode(&prc, keys->dec, c, bits) == 1;
         /* a different anamorphic key does not accept */
-        wrongkey_adec += zbprc_adecode(&prc, &aprc, keys->dec, ak2->dec, c, bits) == 1;
+        other_key_accepted += zbprc_adecode(&prc, &aprc, keys->dec, other_akeys->trapdoor_key,
+                                            c, bits) == 1;
 
         test_bsc(c, bits, BSC_P, &rng);
-        a_noisy += zbprc_adecode(&prc, &aprc, keys->dec, ak->dec, c, bits) == 1;
+        noisy_accepted += zbprc_adecode(&prc, &aprc, keys->dec, akeys->trapdoor_key, c,
+                                        bits) == 1;
         free(c);
 
         /* robustness: regular codewords and random strings are not anamorphic */
-        uint8_t *rc = zbprc_encode(&prc, keys->enc, &rng, &bits);
-        test_bsc(rc, bits, BSC_P, &rng);
-        reg_in_adec += zbprc_adecode(&prc, &aprc, keys->dec, ak->dec, rc, bits) == 1;
-        free(rc);
+        uint8_t *regular = zbprc_encode(&prc, keys->enc, &rng, &bits);
+        test_bsc(regular, bits, BSC_P, &rng);
+        regular_accepted += zbprc_adecode(&prc, &aprc, keys->dec, akeys->trapdoor_key,
+                                          regular, bits) == 1;
+        free(regular);
 
-        uint8_t *r = test_random_bits(ldpc_params.n, &rng);
-        rand_in_adec += zbprc_adecode(&prc, &aprc, keys->dec, ak->dec, r, ldpc_params.n) == 1;
-        free(r);
+        uint8_t *random_string = test_random_bits(ldpc_params.n, &rng);
+        random_accepted += zbprc_adecode(&prc, &aprc, keys->dec, akeys->trapdoor_key,
+                                         random_string, ldpc_params.n) == 1;
+        free(random_string);
     }
 
-    CHECK_MSG(a_acc == TRIALS, "anamorphic accepted %d/%d", a_acc, TRIALS);
-    CHECK_MSG(a_noisy >= TRIALS - 1, "anamorphic noisy accepted %d/%d", a_noisy, TRIALS);
-    CHECK_MSG(a_regdec == TRIALS, "regular decoding of anamorphic %d/%d", a_regdec, TRIALS);
-    CHECK_MSG(reg_in_adec == 0, "regular accepted as anamorphic %d", reg_in_adec);
-    CHECK_MSG(rand_in_adec == 0, "random accepted as anamorphic %d", rand_in_adec);
-    CHECK_MSG(wrongkey_adec == 0, "wrong anamorphic key accepted %d", wrongkey_adec);
+    CHECK_MSG(accepted == TRIALS, "anamorphic accepted %d/%d", accepted, TRIALS);
+    CHECK_MSG(noisy_accepted >= TRIALS - 1, "anamorphic noisy accepted %d/%d", noisy_accepted,
+              TRIALS);
+    CHECK_MSG(regular_decoded == TRIALS, "regular decoding of anamorphic %d/%d",
+              regular_decoded, TRIALS);
+    CHECK_MSG(regular_accepted == 0, "regular accepted as anamorphic %d", regular_accepted);
+    CHECK_MSG(random_accepted == 0, "random accepted as anamorphic %d", random_accepted);
+    CHECK_MSG(other_key_accepted == 0, "wrong anamorphic key accepted %d", other_key_accepted);
 
-    zbprc_free_enc_akey(&prc, &aprc, ak->enc);
-    zbprc_free_dec_akey(&prc, &aprc, ak->dec);
-    free(ak);
-    zbprc_free_enc_akey(&prc, &aprc, ak2->enc);
-    zbprc_free_dec_akey(&prc, &aprc, ak2->dec);
-    free(ak2);
+    zbprc_free_akeys(&prc, &aprc, akeys);
+    zbprc_free_akeys(&prc, &aprc, other_akeys);
     zbprc_free_keys(&prc, keys);
 }
 
@@ -219,18 +261,17 @@ static void test_ldpc_akeygen_repeated(void)
     ZBPRC_Keys *keys = zbprc_keygen(&prc, &rng);
 
     for (int t = 0; t < 15; ++t) {
-        APRC_Keys *ak = zbprc_akeygen(&prc, &aprc, keys, &rng);
-        CHECK(ak != NULL);
-        if (ak == NULL) continue;
+        AZBPRC_Keys *akeys = zbprc_akeygen(&prc, &aprc, keys, &rng);
+        CHECK(akeys != NULL);
+        if (akeys == NULL) continue;
 
         size_t bits = 0;
-        uint8_t *c = zbprc_aencode(&prc, &aprc, keys->enc, ak->enc, &rng, &bits);
-        CHECK(c != NULL && zbprc_adecode(&prc, &aprc, keys->dec, ak->dec, c, bits) == 1);
+        uint8_t *c = zbprc_aencode(&prc, &aprc, keys->enc, akeys->double_key, &rng, &bits);
+        CHECK(c != NULL &&
+              zbprc_adecode(&prc, &aprc, keys->dec, akeys->trapdoor_key, c, bits) == 1);
         free(c);
 
-        zbprc_free_enc_akey(&prc, &aprc, ak->enc);
-        zbprc_free_dec_akey(&prc, &aprc, ak->dec);
-        free(ak);
+        zbprc_free_akeys(&prc, &aprc, akeys);
     }
     zbprc_free_keys(&prc, keys);
 }
@@ -241,6 +282,11 @@ int main(void)
         return 1;
     rng = linux_randomness();
 
+    if (ldpc_admissible_choice(LDPC_N, LDPC_EPSILON, LDPC_DELTA, LDPC_ETA, &ldpc_params,
+                               &ldpc_aparams) != 0)
+        return 1;
+
+    RUN(test_ldpc_admissible_choice);
     RUN(test_ldpc_regular);
     RUN(test_pp_regular);
     RUN(test_pp_seed_recovery);

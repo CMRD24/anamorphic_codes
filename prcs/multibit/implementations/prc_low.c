@@ -1,354 +1,192 @@
+/*
+ * PRC^ell_low: a PRC for messages of ell bits from a zero-bit PRC (the multi-bit
+ * extension of Christ and Gunn, "Pseudorandom Error-Correcting Codes", CRYPTO
+ * 2024, with one block per message bit).
+ *
+ * Encode(m): block i < ell is an encoding of the zero-bit PRC if m_i = 1 and a
+ * uniform string if m_i = 0; block ell is always an encoding (the soundness
+ * check). All gamma = ell + 1 blocks are concatenated and the bits are permuted
+ * with a secret permutation. A uniform block is indistinguishable from an
+ * encoding without the key, so the codeword is pseudorandom.
+ *
+ * Decode: undo the permutation, run the zero-bit decoder on every block (accepted
+ * = bit 1) and require that the last block is accepted. The permutation is
+ * harmless on a binary symmetric channel, which is permutation invariant.
+ */
+
 #include "prc_low.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
-#include <stdio.h>
 
-#include "../../../utils/random_utils.h"
 #include "../../../utils/helpers.h"
+#include "../../../utils/random_utils.h"
 
 
-/*
- * ================================================================
- * Concrete key types
- * ================================================================
- */
-
-struct PRCLow_EncKey {
-
+struct MBPRC_EncKey {
     ZBPRC_EncKey *underlying_key;
-
-    /*
-     * pi[i] gives the output position of input bit i.
-     *
-     * Both arrays contain positions in [0, total_bits).
-     */
-    size_t *pi;
-
-    size_t total_bits;
+    size_t *permutation;           /* permutation[input position] = output position */
 };
 
-
-struct PRCLow_DecKey {
-
+struct MBPRC_DecKey {
     ZBPRC_DecKey *underlying_key;
-
-    /*
-     * Inverse permutation.
-     *
-     * pi_inv[j] is the input bit that appears at output position j.
-     */
-    size_t *pi_inv;
-
-    size_t total_bits;
+    size_t *inverse_permutation;   /* inverse_permutation[output position] = input position */
 };
 
 
-static size_t *
-invert_permutation(
-    const size_t *pi,
-    size_t n)
+static size_t underlying_block_length(const PRCLow_Params *params)
 {
-    size_t *pi_inv =
-        malloc(n * sizeof(*pi_inv));
-
-    if (!pi_inv)
-        return NULL;
-
-    for (size_t i = 0;
-         i < n;
-         ++i)
-    {
-        if (pi[i] >= n) {
-
-            free(pi_inv);
-            return NULL;
-        }
-
-        pi_inv[pi[i]] = i;
-    }
-
-    return pi_inv;
+    return zbprc_block_length(params->underlying);
 }
 
-
-/*
- * ================================================================
- * Random bits
- * ================================================================
- */
-
-static int
-fill_random_bits(
-    RandomnessSource *random,
-    uint8_t *out,
-    size_t bits)
+/* gamma = ell + 1 blocks of the underlying PRC */
+static size_t low_block_length(const void *params_ptr)
 {
-    size_t bytes =
-        bits_to_bytes(bits);
+    const PRCLow_Params *params = params_ptr;
 
-    if (!random ||
-        !random->rng ||
-        !out)
-    {
-        return 0;
-    }
-
-    if (!random->rng(
-            random->ctx,
-            out,
-            bytes))
-    {
-        return 0;
-    }
-
-    /*
-     * Clear unused trailing bits.
-     */
-    if (bits % 8 != 0) {
-
-        uint8_t mask =
-            (uint8_t)((1u << (bits % 8)) - 1u);
-
-        out[bytes - 1] &= mask;
-    }
-
-    return 1;
+    return (params->ell + 1) * underlying_block_length(params);
 }
 
-
-size_t prc_low_blocklength(const void *void_params)
+static int valid_params(const PRCLow_Params *params)
 {
-    const PRCLow_Params *params =
-        void_params;
-
-    return (params->ell + 1)* params->underlying->blocksize(params->underlying->params);
+    return params != NULL && params->underlying != NULL &&
+           params->underlying->block_length != NULL && params->ell < SIZE_MAX &&
+           underlying_block_length(params) <= SIZE_MAX / (params->ell + 1);
 }
 
-
-/*
- * ================================================================
- * Key generation
- * ================================================================
- */
-
-static MBPRC_Keys *
-prc_low_keygen(
-    const void *void_params,
-    RandomnessSource *random)
+static void low_free_enc_key(const void *params_ptr, MBPRC_EncKey *enc_key)
 {
-    const PRCLow_Params *params =
-        void_params;
+    const PRCLow_Params *params = params_ptr;
 
+    if (enc_key == NULL)
+        return;
 
-    if (!params ||
-        !params->underlying ||
-        !params->underlying->keygen ||
-        !params->underlying->free_enc_key ||
-        !params->underlying->free_dec_key ||
-        !random ||
-        !random->rng ||
-        !params->underlying->blocksize ||
-        params->ell == SIZE_MAX)
-    {
-        return NULL;
-    }
+    if (enc_key->underlying_key != NULL)
+        zbprc_free_enc_key(params->underlying, enc_key->underlying_key);
 
-    size_t blocksize_bits = params->underlying->blocksize(params->underlying->params);
+    free(enc_key->permutation);
+    free(enc_key);
+}
 
-    size_t blocks =
-        params->ell + 1;
+static void low_free_dec_key(const void *params_ptr, MBPRC_DecKey *dec_key)
+{
+    const PRCLow_Params *params = params_ptr;
 
-    if (blocksize_bits >
-        SIZE_MAX / blocks)
-    {
-        return NULL;
-    }
+    if (dec_key == NULL)
+        return;
 
-    size_t total_bits =
-        blocksize_bits * blocks;
+    if (dec_key->underlying_key != NULL)
+        zbprc_free_dec_key(params->underlying, dec_key->underlying_key);
 
+    free(dec_key->inverse_permutation);
+    free(dec_key);
+}
 
-    ZBPRC_Keys *underlying_keys =
-        zbprc_keygen(
-            params->underlying,
-            random
-        );
+/* a key pair of the underlying PRC and a uniform permutation of the codeword bits */
+static MBPRC_Keys *low_keygen(const void *params_ptr, RandomnessSource *random)
+{
+    const PRCLow_Params *params = params_ptr;
 
-    if (!underlying_keys)
+    if (!valid_params(params) || random == NULL || random->rng == NULL)
         return NULL;
 
-    PRCLow_EncKey *enc =
-        calloc(1, sizeof(*enc));
+    const size_t codeword_bits = low_block_length(params);
+    MBPRC_Keys *keys = calloc(1, sizeof(*keys));
+    ZBPRC_Keys *underlying_keys = NULL;
 
-    PRCLow_DecKey *dec =
-        calloc(1, sizeof(*dec));
-
-    if (!enc || !dec) {
-
-        free(enc);
-        free(dec);
-
-        zbprc_free_keys(
-            params->underlying,
-            underlying_keys
-        );
-
+    if (keys == NULL)
         return NULL;
-    }
 
-    enc->underlying_key =
-        underlying_keys->enc;
+    keys->enc = calloc(1, sizeof(*keys->enc));
+    keys->dec = calloc(1, sizeof(*keys->dec));
 
-    dec->underlying_key =
-        underlying_keys->dec;
+    if (keys->enc == NULL || keys->dec == NULL)
+        goto fail;
 
-    /*
-     * Ownership of the individual keys was transferred.
-     */
-    underlying_keys->enc = NULL;
-    underlying_keys->dec = NULL;
+    underlying_keys = zbprc_keygen(params->underlying, random);
 
+    if (underlying_keys == NULL)
+        goto fail;
+
+    keys->enc->underlying_key = underlying_keys->enc;
+    keys->dec->underlying_key = underlying_keys->dec;
     free(underlying_keys);
 
-    enc->pi =
-        malloc(total_bits * sizeof(*enc->pi));
+    keys->enc->permutation = malloc(codeword_bits * sizeof(size_t));
+    keys->dec->inverse_permutation = malloc(codeword_bits * sizeof(size_t));
 
-    if (!enc->pi)
-        goto failure;
+    if (keys->enc->permutation == NULL || keys->dec->inverse_permutation == NULL)
+        goto fail;
 
-    random_permutation(
-            random,
-            enc->pi,
-            total_bits);
+    random_permutation(random, keys->enc->permutation, codeword_bits);
 
-    dec->pi_inv =
-        invert_permutation(
-            enc->pi,
-            total_bits);
-
-    if (!dec->pi_inv)
-        goto failure;
-
-    enc->total_bits =
-        total_bits;
-
-    dec->total_bits =
-        total_bits;
-
-    MBPRC_Keys *keys =
-        malloc(sizeof(*keys));
-
-    if (!keys)
-        goto failure;
-
-    keys->enc =
-        (MBPRC_EncKey *)enc;
-
-    keys->dec =
-        (MBPRC_DecKey *)dec;
+    for (size_t i = 0; i < codeword_bits; ++i)
+        keys->dec->inverse_permutation[keys->enc->permutation[i]] = i;
 
     return keys;
 
-
-failure:
-
-    if (enc) {
-
-        free(enc->pi);
-
-        if (enc->underlying_key) {
-            zbprc_free_enc_key(
-                params->underlying,
-                enc->underlying_key
-            );
-        }
-
-        free(enc);
-    }
-
-    if (dec) {
-
-        free(dec->pi_inv);
-
-        if (dec->underlying_key) {
-            zbprc_free_dec_key(
-                params->underlying,
-                dec->underlying_key
-            );
-        }
-
-        free(dec);
-    }
+fail:
+    low_free_enc_key(params, keys->enc);
+    low_free_dec_key(params, keys->dec);
+    free(keys);
 
     return NULL;
 }
 
 
 /*
- * ================================================================
- * Block layout
- * ================================================================
- *
- * The codeword consists of ell + 1 blocks of the underlying zero-bit PRC:
- * block i < ell encodes the message bit i (an encoding of 1 if the bit is 1,
- * a uniform string if it is 0), the last block is an encoding of 1 that serves
- * as soundness check. The blocks are concatenated and permuted bitwise.
+ * The anamorphic part of an encoding (anamorphic lifting): the double key dk of
+ * the regular instance, the encoding key of the extra instance sub, and the
+ * anamorphic message (one bit a_i per block).
  */
-
 typedef struct {
     const aZBPRC *aprc;
-    const APRC_EncKey *dk;       /* anamorphic key of the regular instance */
-    const ZBPRC_EncKey *sub;     /* key of the independent instance */
-    const uint8_t *amessage;    /* ell + 1 bits, LSB first */
-} LowAnamorphicEncoding;
+    const AZBPRC_DoubleKey *double_key;
+    const ZBPRC_EncKey *sub_key;
+    const uint8_t *amessage;
+} LowAnamorphicPart;
 
 /*
- * Block i of an encoding. `regular_one` is x_i = 1 (an encoding of 1 under the
- * regular key), `hidden` is a_i = 1 (anamorphic message embedded):
+ * Block i of an encoding (table "lifting cases" of the thesis), where
+ * x_i = 1 is an encoding of 1 under the regular instance and a_i = 1 an
+ * embedded anamorphic message:
  *
- *               not hidden          hidden
- *   x_i = 0     uniform             Encode(sub key, 1)
- *   x_i = 1     Encode(key, 1)      aEncode(key, dk, 1, 1)
+ *               a_i = 0             a_i = 1
+ *   x_i = 0     uniform             Encode(enc_key^sub)
+ *   x_i = 1     Encode(enc_key)     aEncode(enc_key, dk)
  *
  * Returns a newly allocated block of block_bits bits, NULL on error.
  */
-static uint8_t *
-low_encode_block(
-    const PRCLow_Params *params,
-    const PRCLow_EncKey *key,
-    const LowAnamorphicEncoding *ana,
-    int regular_one,
-    int hidden,
-    size_t block_bits,
-    RandomnessSource *random)
+static uint8_t *encode_block(const PRCLow_Params *params,
+                             const MBPRC_EncKey *enc_key,
+                             const LowAnamorphicPart *anamorphic,
+                             int x_i,
+                             int a_i,
+                             size_t block_bits,
+                             RandomnessSource *random)
 {
     uint8_t *block = NULL;
     size_t bits = 0;
 
-    if (!regular_one && !hidden) {
-        block = calloc(bits_to_bytes(block_bits), 1);
+    if (!x_i && !a_i) {
+        block = malloc(bits_to_bytes(block_bits));
 
-        if (block && !fill_random_bits(random, block, block_bits)) {
-            free(block);
-            return NULL;
-        }
+        if (block != NULL)
+            random_bytes(random, block, bits_to_bytes(block_bits));
 
         return block;
     }
 
-    if (regular_one && hidden) {
-        block = zbprc_aencode(params->underlying, ana->aprc,
-                              key->underlying_key, ana->dk,
-                              random, &bits);
-    } else if (hidden) {
-        block = zbprc_encode(params->underlying, ana->sub, random, &bits);
-    } else {
-        block = zbprc_encode(params->underlying, key->underlying_key, random, &bits);
-    }
+    if (x_i && a_i)
+        block = zbprc_aencode(params->underlying, anamorphic->aprc, enc_key->underlying_key,
+                              anamorphic->double_key, random, &bits);
+    else if (a_i)
+        block = zbprc_encode(params->underlying, anamorphic->sub_key, random, &bits);
+    else
+        block = zbprc_encode(params->underlying, enc_key->underlying_key, random, &bits);
 
-    if (block && bits != block_bits) {
+    if (block != NULL && bits != block_bits) {
         free(block);
         return NULL;
     }
@@ -356,530 +194,398 @@ low_encode_block(
     return block;
 }
 
-/*
- * Encodes the message (ana == NULL: regularly; otherwise with the anamorphic
- * message embedded).
- */
-static uint8_t *
-low_encode(
-    const PRCLow_Params *params,
-    const PRCLow_EncKey *key,
-    const uint8_t *message,
-    size_t message_bits,
-    const LowAnamorphicEncoding *ana,
-    RandomnessSource *random,
-    size_t *output_bits)
+/* Encodes the message, regularly (anamorphic == NULL) or with the anamorphic part. */
+static uint8_t *encode(const PRCLow_Params *params,
+                       const MBPRC_EncKey *enc_key,
+                       const uint8_t *message,
+                       size_t message_bits,
+                       const LowAnamorphicPart *anamorphic,
+                       RandomnessSource *random,
+                       size_t *codeword_bits)
 {
-    if (!params || !key || !message || !random || !random->rng || !output_bits)
+    if (!valid_params(params) || enc_key == NULL || message == NULL ||
+        message_bits != params->ell || random == NULL || random->rng == NULL ||
+        codeword_bits == NULL)
         return NULL;
 
-    if (message_bits != params->ell)
-        return NULL;
+    const size_t block_bits = underlying_block_length(params);
+    const size_t total_bits = low_block_length(params);
+    uint8_t *blocks = calloc(bits_to_bytes(total_bits), 1);
+    uint8_t *codeword = calloc(bits_to_bytes(total_bits), 1);
 
-    if (!params->underlying || !params->underlying->encode)
-        return NULL;
+    if (blocks == NULL || codeword == NULL)
+        goto fail;
 
-    const size_t block_bits =
-        params->underlying->blocksize(params->underlying->params);
-    const size_t blocks = params->ell + 1;
-    const size_t total_bits = key->total_bits;
-
-    if (total_bits != block_bits * blocks)
-        return NULL;
-
-    const size_t total_bytes = bits_to_bytes(total_bits);
-    uint8_t *unpermuted = calloc(total_bytes, 1);
-    uint8_t *ciphertext = calloc(total_bytes, 1);
-
-    if (!unpermuted || !ciphertext)
-        goto failure;
-
-    for (size_t i = 0; i < blocks; ++i) {
+    for (size_t i = 0; i <= params->ell; ++i) {
         /* the last block is the soundness check: always an encoding of 1 */
-        const int regular_one = i == params->ell || get_bit(message, i) == 1;
-        const int hidden = ana && get_bit(ana->amessage, i) == 1;
-        uint8_t *block = low_encode_block(params, key, ana, regular_one,
-                                          hidden, block_bits, random);
+        const int x_i = i == params->ell || get_bit(message, i) == 1;
+        const int a_i = anamorphic != NULL && get_bit(anamorphic->amessage, i) == 1;
+        uint8_t *block = encode_block(params, enc_key, anamorphic, x_i, a_i, block_bits,
+                                      random);
 
-        if (!block)
-            goto failure;
+        if (block == NULL)
+            goto fail;
 
-        copy_bits(unpermuted, i * block_bits, block, 0, block_bits);
+        copy_bits(blocks, i * block_bits, block, 0, block_bits);
         free(block);
     }
 
-    /* pi[input_position] = output_position */
     for (size_t i = 0; i < total_bits; ++i)
-        set_bit(ciphertext, key->pi[i], get_bit(unpermuted, i));
+        set_bit(codeword, enc_key->permutation[i], get_bit(blocks, i));
 
-    free(unpermuted);
-    *output_bits = total_bits;
+    free(blocks);
+    *codeword_bits = total_bits;
 
-    return ciphertext;
+    return codeword;
 
-failure:
-    free(unpermuted);
-    free(ciphertext);
+fail:
+    free(blocks);
+    free(codeword);
+
     return NULL;
 }
 
-static uint8_t *
-prc_low_encode(
-    const void *void_params,
-    const MBPRC_EncKey *void_key,
-    const uint8_t *message,
-    size_t message_bits,
-    RandomnessSource *random,
-    size_t *output_bits)
+static uint8_t *low_encode(const void *params_ptr,
+                           const MBPRC_EncKey *enc_key,
+                           const uint8_t *message,
+                           size_t message_bits,
+                           RandomnessSource *random,
+                           size_t *codeword_bits)
 {
-    return low_encode(void_params, (const PRCLow_EncKey *)void_key, message,
-                      message_bits, NULL, random, output_bits);
+    return encode(params_ptr, enc_key, message, message_bits, NULL, random, codeword_bits);
 }
 
-
 /*
- * ================================================================
- * Decoding
- * ================================================================
+ * Unnest: checks the length and undoes the permutation. Returns the gamma
+ * concatenated blocks (newly allocated), NULL on error.
  */
-
-/*
- * Checks the length and undoes the permutation. Returns the ell + 1
- * concatenated blocks (newly allocated) and the block size, NULL on error.
- */
-static uint8_t *
-low_unpermute(
-    const PRCLow_Params *params,
-    const PRCLow_DecKey *key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits,
-    size_t *block_bits_out)
+static uint8_t *unnest(const PRCLow_Params *params,
+                       const MBPRC_DecKey *dec_key,
+                       const uint8_t *codeword,
+                       size_t codeword_bits)
 {
-    if (!params || !key || !ciphertext ||
-        !params->underlying || !params->underlying->decode ||
-        params->ell == SIZE_MAX)
+    if (!valid_params(params) || dec_key == NULL || codeword == NULL ||
+        codeword_bits != low_block_length(params))
         return NULL;
 
-    const size_t block_bits =
-        params->underlying->blocksize(params->underlying->params);
-    const size_t blocks = params->ell + 1;
+    uint8_t *blocks = calloc(bits_to_bytes(codeword_bits), 1);
 
-    if (block_bits > SIZE_MAX / blocks)
+    if (blocks == NULL)
         return NULL;
 
-    /* PRC^ell_low expects exactly block_bits * (ell + 1) bits */
-    if (ciphertext_bits != block_bits * blocks ||
-        key->total_bits != ciphertext_bits)
-        return NULL;
+    for (size_t i = 0; i < codeword_bits; ++i)
+        set_bit(blocks, dec_key->inverse_permutation[i], get_bit(codeword, i));
 
-    uint8_t *unpermuted = calloc(bits_to_bytes(ciphertext_bits), 1);
-
-    if (!unpermuted)
-        return NULL;
-
-    /* pi_inv[output_position] = input_position */
-    for (size_t output_pos = 0; output_pos < ciphertext_bits; ++output_pos) {
-        set_bit(unpermuted, key->pi_inv[output_pos],
-                get_bit(ciphertext, output_pos));
-    }
-
-    *block_bits_out = block_bits;
-
-    return unpermuted;
+    return blocks;
 }
 
-static int
-prc_low_decode(
-    const void *void_params,
-    const MBPRC_DecKey *void_key,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits,
-    uint8_t *message_out,
-    size_t *message_bits_out)
+/*
+ * Runs decide_block on every block i (copied to a buffer of its own) and writes
+ * the answer as bit i of bits_out. Returns the number of blocks decided 1, or
+ * -1 on error.
+ */
+typedef int (*BlockDecision)(const void *context, const uint8_t *block, size_t block_bits);
+
+static long decide_blocks(const PRCLow_Params *params, const MBPRC_DecKey *dec_key,
+                          const uint8_t *codeword, size_t codeword_bits,
+                          BlockDecision decide_block, const void *context,
+                          uint8_t *bits_out)
 {
-    const PRCLow_Params *params = void_params;
-    const PRCLow_DecKey *key = (const PRCLow_DecKey *)void_key;
-    size_t block_bits = 0;
-    uint8_t *unpermuted, *block;
-    int sound = 0;
+    const size_t block_bits = valid_params(params) ? underlying_block_length(params) : 0;
+    uint8_t *blocks = unnest(params, dec_key, codeword, codeword_bits);
+    uint8_t *block = calloc(bits_to_bytes(block_bits) + 1, 1);
+    long ones = 0;
 
-    if (!message_out || !message_bits_out)
-        return 0;
-
-    unpermuted = low_unpermute(params, key, ciphertext, ciphertext_bits, &block_bits);
-    if (!unpermuted)
-        return 0;
-
-    block = calloc(bits_to_bytes(block_bits), 1);
-    if (!block) {
-        free(unpermuted);
-        return 0;
+    if (blocks == NULL || block == NULL) {
+        free(blocks);
+        free(block);
+        return -1;
     }
 
-    /* blocks 0..ell-1 carry the message, the last one is the soundness check */
     for (size_t i = 0; i <= params->ell; ++i) {
-        int accepted;
+        copy_bits(block, 0, blocks, i * block_bits, block_bits);
 
-        memset(block, 0, bits_to_bytes(block_bits));
-        copy_bits(block, 0, unpermuted, i * block_bits, block_bits);
+        const int bit = decide_block(context, block, block_bits) == 1;
 
-        accepted = zbprc_decode(params->underlying, key->underlying_key,
-                                block, block_bits) == 1;
-
-        if (i < params->ell)
-            set_bit(message_out, i, accepted ? 1 : 0);
-        else
-            sound = accepted;
+        set_bit(bits_out, i, (uint8_t)bit);
+        ones += bit;
     }
 
     free(block);
-    free(unpermuted);
+    free(blocks);
 
-    if (!sound)
+    return ones;
+}
+
+typedef struct {
+    const PRCLow_Params *params;
+    const MBPRC_DecKey *dec_key;
+} RegularDecision;
+
+static int regular_block_decision(const void *context, const uint8_t *block,
+                                  size_t block_bits)
+{
+    const RegularDecision *decision = context;
+
+    return zbprc_decode(decision->params->underlying, decision->dec_key->underlying_key,
+                        block, block_bits);
+}
+
+/* blocks 0..ell-1 carry the message, the last one (block ell) must be accepted */
+static int low_decode(const void *params_ptr,
+                      const MBPRC_DecKey *dec_key,
+                      const uint8_t *codeword,
+                      size_t codeword_bits,
+                      uint8_t *message_out,
+                      size_t *message_bits_out)
+{
+    const PRCLow_Params *params = params_ptr;
+
+    if (params == NULL || message_out == NULL || message_bits_out == NULL)
         return 0;
 
-    /* PRC^ell_low always outputs exactly ell bits */
-    *message_bits_out = params->ell;
+    const RegularDecision decision = {.params = params, .dec_key = dec_key};
+    uint8_t *decoded = calloc(bits_to_bytes(params->ell + 1), 1);
 
-    return 1;
-}
+    if (decoded == NULL)
+        return 0;
 
+    const int ok = decide_blocks(params, dec_key, codeword, codeword_bits,
+                                 regular_block_decision, &decision, decoded) >= 0 &&
+                   get_bit(decoded, params->ell) == 1;
 
-/*
- * ================================================================
- * Key destruction
- * ================================================================
- */
-
-static void
-prc_low_free_enc_key(
-    const void *void_params,
-    MBPRC_EncKey *void_key)
-{
-    const PRCLow_Params *params =
-        void_params;
-
-    PRCLow_EncKey *key =
-        (PRCLow_EncKey *)void_key;
-
-    if (!key)
-        return;
-
-    free(key->pi);
-
-    if (key->underlying_key &&
-        params &&
-        params->underlying)
-    {
-        zbprc_free_enc_key(
-            params->underlying,
-            key->underlying_key
-        );
+    if (ok) {
+        copy_bits(message_out, 0, decoded, 0, params->ell);
+        *message_bits_out = params->ell;
     }
 
-    free(key);
+    free(decoded);
+
+    return ok;
 }
 
-
-static void
-prc_low_free_dec_key(
-    const void *void_params,
-    MBPRC_DecKey *void_key)
+MBPRC prc_low(const PRCLow_Params *params)
 {
-    const PRCLow_Params *params =
-        void_params;
-
-    PRCLow_DecKey *key =
-        (PRCLow_DecKey *)void_key;
-
-    if (!key)
-        return;
-
-    free(key->pi_inv);
-
-    if (key->underlying_key &&
-        params &&
-        params->underlying)
-    {
-        zbprc_free_dec_key(
-            params->underlying,
-            key->underlying_key
-        );
-    }
-
-    free(key);
-}
-
-
-/*
- * ================================================================
- * Construction / destruction
- * ================================================================
- */
-
-MBPRC
-prc_low(
-    const PRCLow_Params *params)
-{
-
-    return (MBPRC) {
+    return (MBPRC){
         .params = params,
-
-        .blocksize = prc_low_blocklength,
-
-        .keygen =
-            prc_low_keygen,
-
-        .encode =
-            prc_low_encode,
-
-        .decode =
-            prc_low_decode,
-
-        .free_enc_key =
-            prc_low_free_enc_key,
-
-        .free_dec_key =
-            prc_low_free_dec_key
+        .block_length = low_block_length,
+        .keygen = low_keygen,
+        .encode = low_encode,
+        .decode = low_decode,
+        .free_enc_key = low_free_enc_key,
+        .free_dec_key = low_free_dec_key,
     };
-
 }
 
 
 /*
- * ================================================================
- * Anamorphic mode (anamorphic lifting)
- * ================================================================
+ * Anamorphic mode (anamorphic lifting).
  *
- * PRC^ell_low is a nested PRC with gamma = ell + 1 blocks and J = 1 instance
- * of the underlying zero-bit PRC. The anamorphic message has one bit per block
+ * PRC^ell_low is a nested PRC with gamma = ell + 1 blocks and J = 1 instance of
+ * the underlying zero-bit PRC. The anamorphic message has one bit per block
  * (ell + 1 bits); the all-zero message is excluded.
  */
 
-struct AMBPRC_EncKey {
-    APRC_EncKey *dk;
-    ZBPRC_EncKey *sub;
+struct AMBPRC_DoubleKey {
+    AZBPRC_DoubleKey *double_key;       /* dk of the regular instance */
+    ZBPRC_EncKey *sub;                  /* enc_key^sub */
 };
 
-struct AMBPRC_DecKey {
-    APRC_DecKey *tk;
-    ZBPRC_DecKey *sub;
+struct AMBPRC_TrapdoorKey {
+    AZBPRC_TrapdoorKey *trapdoor_key;   /* tk of the regular instance */
+    ZBPRC_DecKey *sub;                  /* dec_key^sub */
 };
 
-static size_t
-aprc_low_amessage_bits(
-    const void *params,
-    const void *aparams)
+static size_t alow_amessage_bits(const void *params_ptr, const void *aparams)
 {
-    const PRCLow_Params *p = params;
+    const PRCLow_Params *params = params_ptr;
 
     (void)aparams;
 
-    return p->ell + 1;
+    return params->ell + 1;
 }
 
-static void
-aprc_low_free_aenc_key(
-    const void *params,
-    const void *aparams,
-    AMBPRC_EncKey *key)
+static void alow_free_double_key(const void *params_ptr, const void *aparams_ptr,
+                                 AMBPRC_DoubleKey *double_key)
 {
-    const PRCLow_Params *p = params;
-    const APRCLow_Params *ap = aparams;
+    const PRCLow_Params *params = params_ptr;
+    const APRCLow_Params *aparams = aparams_ptr;
 
-    if (!key)
+    if (double_key == NULL)
         return;
 
-    if (key->dk)
-        zbprc_free_enc_akey(p->underlying, ap->underlying_aprc, key->dk);
-    if (key->sub)
-        zbprc_free_enc_key(p->underlying, key->sub);
+    zbprc_free_double_key(params->underlying, aparams->underlying_aprc, double_key->double_key);
 
-    free(key);
+    if (double_key->sub != NULL)
+        zbprc_free_enc_key(params->underlying, double_key->sub);
+
+    free(double_key);
 }
 
-static void
-aprc_low_free_adec_key(
-    const void *params,
-    const void *aparams,
-    AMBPRC_DecKey *key)
+static void alow_free_trapdoor_key(const void *params_ptr, const void *aparams_ptr,
+                                   AMBPRC_TrapdoorKey *trapdoor_key)
 {
-    const PRCLow_Params *p = params;
-    const APRCLow_Params *ap = aparams;
+    const PRCLow_Params *params = params_ptr;
+    const APRCLow_Params *aparams = aparams_ptr;
 
-    if (!key)
+    if (trapdoor_key == NULL)
         return;
 
-    if (key->tk)
-        zbprc_free_dec_akey(p->underlying, ap->underlying_aprc, key->tk);
-    if (key->sub)
-        zbprc_free_dec_key(p->underlying, key->sub);
+    zbprc_free_trapdoor_key(params->underlying, aparams->underlying_aprc,
+                            trapdoor_key->trapdoor_key);
 
-    free(key);
+    if (trapdoor_key->sub != NULL)
+        zbprc_free_dec_key(params->underlying, trapdoor_key->sub);
+
+    free(trapdoor_key);
 }
 
-static AMBPRC_Keys *
-aprc_low_akeygen(
-    const void *params,
-    const void *aparams,
-    MBPRC_Keys *reg_keys,
-    RandomnessSource *random)
+/* aKeyGen: a fresh instance sub and (dk, tk) <- aKeyGen^0 for the regular instance */
+static AMBPRC_Keys *alow_akeygen(const void *params_ptr, const void *aparams_ptr,
+                                 MBPRC_Keys *regular_keys, RandomnessSource *random)
 {
-    const PRCLow_Params *p = params;
-    const APRCLow_Params *ap = aparams;
-    AMBPRC_Keys *keys = calloc(1, sizeof(*keys));
-    ZBPRC_Keys *sub = NULL;
-    APRC_Keys *ak = NULL;
+    const PRCLow_Params *params = params_ptr;
+    const APRCLow_Params *aparams = aparams_ptr;
 
-    if (!p || !ap || !p->underlying || !ap->underlying_aprc ||
-        !reg_keys || !random || !keys)
+    if (!valid_params(params) || aparams == NULL || aparams->underlying_aprc == NULL ||
+        regular_keys == NULL || random == NULL)
+        return NULL;
+
+    AMBPRC_Keys *akeys = calloc(1, sizeof(*akeys));
+    ZBPRC_Keys *sub_keys = NULL;
+    AZBPRC_Keys *underlying_akeys = NULL;
+
+    if (akeys == NULL)
+        return NULL;
+
+    akeys->double_key = calloc(1, sizeof(*akeys->double_key));
+    akeys->trapdoor_key = calloc(1, sizeof(*akeys->trapdoor_key));
+
+    if (akeys->double_key == NULL || akeys->trapdoor_key == NULL)
         goto fail;
 
-    keys->enc = calloc(1, sizeof(*keys->enc));
-    keys->dec = calloc(1, sizeof(*keys->dec));
+    sub_keys = zbprc_keygen(params->underlying, random);
 
-    if (!keys->enc || !keys->dec)
+    if (sub_keys == NULL)
         goto fail;
 
-    /* independent instance for blocks that are uniform in the regular code */
-    sub = zbprc_keygen(p->underlying, random);
-    if (!sub)
+    akeys->double_key->sub = sub_keys->enc;
+    akeys->trapdoor_key->sub = sub_keys->dec;
+    free(sub_keys);
+
+    ZBPRC_Keys underlying_keys = {
+        .enc = regular_keys->enc->underlying_key,
+        .dec = regular_keys->dec->underlying_key,
+    };
+
+    underlying_akeys = zbprc_akeygen(params->underlying, aparams->underlying_aprc,
+                                     &underlying_keys, random);
+
+    if (underlying_akeys == NULL)
         goto fail;
 
-    keys->enc->sub = sub->enc;
-    keys->dec->sub = sub->dec;
-    free(sub);
+    akeys->double_key->double_key = underlying_akeys->double_key;
+    akeys->trapdoor_key->trapdoor_key = underlying_akeys->trapdoor_key;
+    free(underlying_akeys);//ok, because underlying_akeys does not own dk & tk
 
-    {
-        const PRCLow_EncKey *enc = (const PRCLow_EncKey *)reg_keys->enc;
-        const PRCLow_DecKey *dec = (const PRCLow_DecKey *)reg_keys->dec;
-        ZBPRC_Keys regular = {
-            .enc = enc->underlying_key,
-            .dec = dec->underlying_key,
-        };
-
-        ak = zbprc_akeygen(p->underlying, ap->underlying_aprc, &regular, random);
-    }
-
-    if (!ak)
-        goto fail;
-
-    keys->enc->dk = ak->enc;
-    keys->dec->tk = ak->dec;
-    free(ak);
-
-    return keys;
+    return akeys;
 
 fail:
-    if (keys) {
-        aprc_low_free_aenc_key(params, aparams, keys->enc);
-        aprc_low_free_adec_key(params, aparams, keys->dec);
-        free(keys);
-    }
+    alow_free_double_key(params, aparams, akeys->double_key);
+    alow_free_trapdoor_key(params, aparams, akeys->trapdoor_key);
+    free(akeys);
 
     return NULL;
 }
 
-static uint8_t *
-aprc_low_aencode(
-    const void *params,
-    const void *aparams,
-    const MBPRC_EncKey *reg_key,
-    const AMBPRC_EncKey *dkey,
-    const uint8_t *message,
-    size_t message_bits,
-    const uint8_t *amessage,
-    RandomnessSource *random,
-    size_t *output_bits)
+static uint8_t *alow_aencode(const void *params_ptr,
+                             const void *aparams_ptr,
+                             const MBPRC_EncKey *enc_key,
+                             const AMBPRC_DoubleKey *double_key,
+                             const uint8_t *message,
+                             size_t message_bits,
+                             const uint8_t *amessage,
+                             RandomnessSource *random,
+                             size_t *codeword_bits)
 {
-    const PRCLow_Params *p = params;
-    const APRCLow_Params *ap = aparams;
-    int any = 0;
+    const PRCLow_Params *params = params_ptr;
+    const APRCLow_Params *aparams = aparams_ptr;
+    int nonzero = 0;
 
-    if (!p || !ap || !reg_key || !dkey || !amessage)
+    if (params == NULL || aparams == NULL || double_key == NULL || amessage == NULL)
         return NULL;
 
-    for (size_t i = 0; i <= p->ell; ++i)
-        any |= get_bit(amessage, i);
+    for (size_t i = 0; i <= params->ell; ++i)
+        nonzero |= get_bit(amessage, i);//bitwise xor to check if at least one "1" in anamorphic message
 
     /* the all-zero message means "no anamorphic message" */
-    if (!any)
+    if (!nonzero)
         return NULL;
 
-    const LowAnamorphicEncoding ana = {
-        .aprc = ap->underlying_aprc,
-        .dk = dkey->dk,
-        .sub = dkey->sub,
+    const LowAnamorphicPart anamorphic = {
+        .aprc = aparams->underlying_aprc,
+        .double_key = double_key->double_key,
+        .sub_key = double_key->sub,
         .amessage = amessage,
     };
 
-    return low_encode(p, (const PRCLow_EncKey *)reg_key, message, message_bits,
-                      &ana, random, output_bits);
+    return encode(params, enc_key, message, message_bits, &anamorphic, random,
+                  codeword_bits);
 }
 
-static int
-aprc_low_adecode(
-    const void *params,
-    const void *aparams,
-    const MBPRC_DecKey *reg_key,
-    const AMBPRC_DecKey *tkey,
-    const uint8_t *ciphertext,
-    size_t ciphertext_bits,
-    uint8_t *amessage_out)
+typedef struct {
+    const PRCLow_Params *params;
+    const APRCLow_Params *aparams;
+    const MBPRC_DecKey *dec_key;
+    const AMBPRC_TrapdoorKey *trapdoor_key;
+} AnamorphicDecision;
+
+/* r_i = 1 iff aDecode^0 of the regular instance or Decode^0 of sub accepts */
+static int anamorphic_block_decision(const void *context, const uint8_t *block,
+                                     size_t block_bits)
 {
-    const PRCLow_Params *p = params;
-    const APRCLow_Params *ap = aparams;
-    const PRCLow_DecKey *key = (const PRCLow_DecKey *)reg_key;
-    size_t block_bits = 0;
-    uint8_t *unpermuted, *block;
-    int any = 0;
+    const AnamorphicDecision *decision = context;
+    const ZBPRC *underlying = decision->params->underlying;
 
-    if (!ap || !tkey || !amessage_out)
-        return 0;
-
-    unpermuted = low_unpermute(p, key, ciphertext, ciphertext_bits, &block_bits);
-    if (!unpermuted)
-        return 0;
-
-    block = calloc(bits_to_bytes(block_bits), 1);
-    if (!block) {
-        free(unpermuted);
-        return 0;
-    }
-
-    for (size_t i = 0; i <= p->ell; ++i) {
-        int hidden;
-
-        memset(block, 0, bits_to_bytes(block_bits));
-        copy_bits(block, 0, unpermuted, i * block_bits, block_bits);
-
-        /* r_i: the instance with the regular key, else the independent one */
-        hidden = zbprc_adecode(p->underlying, ap->underlying_aprc,
-                               key->underlying_key, tkey->tk,
-                               block, block_bits) == 1 ||
-                 zbprc_decode(p->underlying, tkey->sub, block, block_bits) == 1;
-
-        set_bit(amessage_out, i, hidden ? 1 : 0);
-        any |= hidden;
-    }
-
-    free(block);
-    free(unpermuted);
-
-    return any;
+    return zbprc_adecode(underlying, decision->aparams->underlying_aprc,
+                         decision->dec_key->underlying_key,
+                         decision->trapdoor_key->trapdoor_key, block, block_bits) == 1 ||
+           zbprc_decode(underlying, decision->trapdoor_key->sub, block, block_bits) == 1;
 }
 
-aMBPRC
-aprc_low(
-    const APRCLow_Params *aparams)
+static int alow_adecode(const void *params_ptr,
+                        const void *aparams_ptr,
+                        const MBPRC_DecKey *dec_key,
+                        const AMBPRC_TrapdoorKey *trapdoor_key,
+                        const uint8_t *codeword,
+                        size_t codeword_bits,
+                        uint8_t *amessage_out)
 {
-    return (aMBPRC) {
+    const AnamorphicDecision decision = {
+        .params = params_ptr,
+        .aparams = aparams_ptr,
+        .dec_key = dec_key,
+        .trapdoor_key = trapdoor_key,
+    };
+
+    if (decision.params == NULL || decision.aparams == NULL || trapdoor_key == NULL ||
+        amessage_out == NULL)
+        return 0;
+
+    /* the all-zero result means "no anamorphic message" */
+    return decide_blocks(decision.params, dec_key, codeword, codeword_bits,
+                         anamorphic_block_decision, &decision, amessage_out) > 0;
+}
+
+aMBPRC aprc_low(const APRCLow_Params *aparams)
+{
+    return (aMBPRC){
         .aparams = aparams,
-        .amessage_bits = aprc_low_amessage_bits,
-        .akeygen = aprc_low_akeygen,
-        .aencode = aprc_low_aencode,
-        .adecode = aprc_low_adecode,
-        .free_aenc_key = aprc_low_free_aenc_key,
-        .free_adec_key = aprc_low_free_adec_key,
+        .amessage_bits = alow_amessage_bits,
+        .akeygen = alow_akeygen,
+        .aencode = alow_aencode,
+        .adecode = alow_adecode,
+        .free_double_key = alow_free_double_key,
+        .free_trapdoor_key = alow_free_trapdoor_key,
     };
 }

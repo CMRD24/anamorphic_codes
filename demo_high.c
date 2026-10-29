@@ -7,10 +7,10 @@
 #include "utils/hamming74.h"
 
 static const DemoParamSpec specs[] = {
-    DEMO_LDPC_SPECS("1024", "512", "256", "11", "0.01"),
+    DEMO_LDPC_SPECS_SMALL,
     {"lambda", "128", "security parameter in bits (multiple of 8); length of the recovered seed"},
     {"message_bits", "64", "message length in bits (multiple of 8)"},
-    {"indication_len", "0", "indication seeds (extra codewords that make adecode reject other strings)"},
+    {"indication_seeds", "0", "indication seeds (extra codewords that make adecode reject other strings)"},
     {"amessage_bytes", "8", "anamorphic message bytes; the nonce fills the rest of the seed (>= 8 bytes)"},
     {NULL, NULL, NULL}
 };
@@ -27,42 +27,46 @@ typedef struct {
 
 static void *high_open(const DemoParams *params, const DemoKeys *keys)
 {
-    DemoPrc *p = demo_prc_new(sizeof(Storage));
-    Storage *s;
+    DemoPrc *prc = demo_prc_new(sizeof(Storage));
 
-    if (p == NULL)
+    if (prc == NULL)
         return NULL;
 
-    s = p->storage;
-    s->ldpc = demo_ldpc_params(params);
-    s->underlying = prc_ldpc(&s->ldpc);
-    /* the inner PRC carries the lambda-bit seed */
-    s->low_params = (PRCLow_Params){
-        .underlying = &s->underlying,
-        .ell = demo_param_size(params, "lambda"),
-    };
-    s->low = prc_low(&s->low_params);
-    s->ecc = hamming74_ecc();
-    s->high = (PRCHigh_Params){
-        .low_prc = &s->low,
-        .ecc = &s->ecc,
-        .lambda = demo_param_size(params, "lambda"),
-        .message_bits = demo_param_size(params, "message_bits"),
-    };
-    s->rr = prc_high_rr(&s->high);
+    Storage *storage = prc->storage;
 
-    p->mb_rr = &s->rr;
-    p->message_bits = s->high.message_bits;
-    p->seed_bits = s->high.lambda;
-    p->indication_len = demo_param_size(params, "indication_len");
-    p->amessage_bytes = demo_param_size(params, "amessage_bytes");
-
-    if (demo_prc_finish(p, keys) != 0) {
-        demo_prc_close(p);
+    if (demo_ldpc_params(params, &storage->ldpc, NULL) != 0) {
+        demo_prc_close(prc);
         return NULL;
     }
 
-    return p;
+    storage->underlying = prc_ldpc(&storage->ldpc);
+    /* the inner PRC carries the lambda-bit seed r */
+    storage->low_params = (PRCLow_Params){
+        .underlying = &storage->underlying,
+        .ell = demo_param_size(params, "lambda"),
+    };
+    storage->low = prc_low(&storage->low_params);
+    storage->ecc = hamming74_ecc();
+    storage->high = (PRCHigh_Params){
+        .inner = &storage->low,
+        .ecc = &storage->ecc,
+        .lambda = demo_param_size(params, "lambda"),
+        .message_bits = demo_param_size(params, "message_bits"),
+    };
+    storage->rr = prc_high_rr(&storage->high);
+
+    prc->multibit_rr = &storage->rr;
+    prc->message_bits = storage->high.message_bits;
+    prc->seed_bits = storage->high.lambda;
+    prc->indication_seeds = demo_param_size(params, "indication_seeds");
+    prc->amessage_bytes = demo_param_size(params, "amessage_bytes");
+
+    if (demo_prc_finish(prc, keys) != 0) {
+        demo_prc_close(prc);
+        return NULL;
+    }
+
+    return prc;
 }
 
 /* exported so that the benchmark can use the code without its main */
@@ -78,6 +82,8 @@ const DemoOps demo_high_ops = {
     .decode = demo_prc_decode,
     .aencode = demo_prc_aencode,
     .adecode = demo_prc_adecode,
+    .akeygen = demo_prc_akeygen,
+    .sample_messages = demo_prc_sample_messages,
 };
 
 #ifndef DEMO_NO_MAIN

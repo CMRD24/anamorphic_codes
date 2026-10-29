@@ -45,14 +45,14 @@ typedef struct {
     char values[DEMO_MAX_PARAMS][64];
 } DemoParams;
 
-/* fills p with the default values of specs */
-void demo_params_defaults(DemoParams *p, const DemoParamSpec *specs);
+/* fills params with the default values of specs */
+void demo_params_defaults(DemoParams *params, const DemoParamSpec *specs);
 /* sets a parameter; -1 (after a message) if the name is unknown or the value too long */
-int demo_params_set(DemoParams *p, const char *name, const char *value);
+int demo_params_set(DemoParams *params, const char *name, const char *value);
 
-const char *demo_param(const DemoParams *p, const char *name);
-size_t demo_param_size(const DemoParams *p, const char *name);
-double demo_param_double(const DemoParams *p, const char *name);
+const char *demo_param(const DemoParams *params, const char *name);
+size_t demo_param_size(const DemoParams *params, const char *name);
+double demo_param_double(const DemoParams *params, const char *name);
 
 /* ---- keys ------------------------------------------------------------- */
 
@@ -75,16 +75,28 @@ typedef struct {
 } DemoCiphertext;
 
 /* allocates count codewords of the given size (zeroed) */
-int demo_ct_alloc(DemoCiphertext *ct, size_t count, size_t bits);
-void demo_ct_free(DemoCiphertext *ct);
+int demo_ct_alloc(DemoCiphertext *ciphertext, size_t count, size_t bits);
+void demo_ct_free(DemoCiphertext *ciphertext);
 
 /* ---- messages --------------------------------------------------------- */
 
-/* copies s into buf, zero-padded; -1 if s is longer than len */
-int demo_pad_message(const char *s, uint8_t *buf, size_t len);
+/*
+ * A message is text, or "hex:" followed by hex digits for arbitrary bytes
+ * (e.g. "hex:00ff10").
+ */
+
+/* the length of a message in bytes */
+size_t demo_message_length(const char *text);
+
+/* copies the message into buffer, zero-padded; -1 if it is malformed or longer than len */
+int demo_pad_message(const char *text, uint8_t *buffer, size_t len);
+
+/* a uniformly random message of bits bits as "hex:..." (the unused high bits of
+ * the last byte are zero); NULL on allocation failure, free with free() */
+char *demo_random_message(size_t bits);
 
 /* prints bytes as text (trailing zeros trimmed), or as hex if not printable */
-void demo_print_bytes(const char *label, const uint8_t *buf, size_t len);
+void demo_print_bytes(const char *label, const uint8_t *buffer, size_t len);
 
 /* ---- a code ----------------------------------------------------------- */
 
@@ -103,6 +115,21 @@ typedef struct {
      */
     void *(*open)(const DemoParams *params, const DemoKeys *keys);
     void (*close)(void *handle);
+
+    /*
+     * Generates the anamorphic key of a code that was opened without it, from
+     * the anamorphic key seed and the regular keys of the handle (which are not
+     * generated again). open calls it when the anamorphic key is present.
+     * Returns 0, or -1 after printing the reason. NULL without anamorphic mode.
+     */
+    int (*akeygen)(void *handle, const uint8_t key[DEMO_KEY_BYTES]);
+
+    /*
+     * Samples a uniformly random regular and anamorphic message, written in the
+     * format that encode and aencode expect (used by the benchmark). Free both
+     * with free(). Returns 0, or -1 on allocation failure.
+     */
+    int (*sample_messages)(void *handle, char **message, char **amessage);
 
     /* All operations return 0 on success and -1 on failure/rejection and
      * print their result themselves. */

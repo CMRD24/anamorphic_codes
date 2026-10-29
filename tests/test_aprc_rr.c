@@ -5,136 +5,164 @@
 #include "test_common.h"
 #include "../prcs/zerobit/implementations/prc_pp.h"
 #include "../prcs/zerobit/implementations/prc_ldpc.h"
+#include "../prcs/anamorphism/zerobit/aprc_ldpc.h"
 #include "../prcs/multibit/implementations/prc_low.h"
-#include "../prcs/multibit/implementations/prc_cca.h"
+#include "../prcs/multibit/implementations/prc_reencode.h"
 #include "../prcs/anamorphism/aprc_rr.h"
-#include "../prcs/anamorphism/rr_core.h"
 #include "../utils/hamming74.h"
 
 #include <sodium.h>
 
 static RandomnessSource rng;
 
-static void free_codewords(uint8_t **cw, size_t n)
-{
-    if (cw == NULL) return;
-    for (size_t i = 0; i < n; ++i) free(cw[i]);
-    free(cw);
-}
+/* the admissible LDPC instance of the nested PRCs (r = 64, g = 4160, t = 3) */
+static LDPCParams ldpc_params;
 
 static void test_pp_anamorphic(void)
 {
-    enum { AMSG = 16 };
+    enum { AMESSAGE_BYTES = 16 };
     ECC ecc = hamming74_ecc();
-    PPParams params = {.delta = 0.0, .ecc = &ecc, .n = 16 * 8, .q = 2,
-                       .message_bytes = 8, .symbol_bits = 1};
+    PPParams params = {.ecc = &ecc, .seed_bytes = 8, .q = 2, .symbol_bits = 1,
+                       .n = 16 * 8, .delta = 0.0};
     ZBPRC_RR prc = prc_pp_rr(&params);
 
     /* 32 indication seeds, 3 seeds (24 bytes) hold an 8 byte nonce and the message */
-    aZBPRC_RR_Params ap = {.prc_rr = &prc, .mu = 32 + 3, .message_bytes = AMSG,
-                           .indication_len = 32, .seed_len = 64};
-    aZBPRC_RR aprc = aZBPRC_RR_init(&ap);
+    const aZBPRC_RR aprc = {
+        .shape = {.seed_bits = 64, .indication_seeds = 32, .codeword_count = 32 + 3,
+                  .amessage_bytes = AMESSAGE_BYTES},
+        .prc = &prc,
+    };
+    const size_t count = aprc.shape.codeword_count;
 
     ZBPRC_Keys *keys = zbprc_keygen(&prc.base, &rng);
-    APRC_RR_Keys *dk = aprc.akeygen(&ap, &rng);
-    APRC_RR_Keys *dk2 = aprc.akeygen(&ap, &rng);
-    CHECK(keys != NULL && dk != NULL && dk2 != NULL);
-    if (!keys || !dk || !dk2) return;
+    RR_AKeys *akeys = rr_akeygen(&rng);
+    RR_AKeys *other_akeys = rr_akeygen(&rng);
+    CHECK(keys != NULL && akeys != NULL && other_akeys != NULL);
+    if (!keys || !akeys || !other_akeys) return;
 
     for (int t = 0; t < 5; ++t) {
-        uint8_t msg[AMSG], out[AMSG] = {0};
-        rng.rng(rng.ctx, msg, sizeof msg);
+        uint8_t amessage[AMESSAGE_BYTES], decoded[AMESSAGE_BYTES] = {0};
+        rng.rng(rng.ctx, amessage, sizeof amessage);
 
         size_t bits = 0;
-        uint8_t **cw = aprc.aencode(&ap, keys->enc, dk, msg, &rng, &bits);
-        CHECK(cw != NULL);
-        if (cw == NULL) continue;
+        uint8_t **codewords = azbprc_rr_aencode(&aprc, keys->enc, akeys, amessage, &rng, &bits);
+        CHECK(codewords != NULL);
+        if (codewords == NULL) continue;
 
-        CHECK(aprc.adecode(&ap, keys->dec, dk, (const uint8_t *const *)cw, bits, out) == 1);
-        CHECK(memcmp(msg, out, AMSG) == 0);
+        CHECK(azbprc_rr_adecode(&aprc, keys->dec, akeys, (const uint8_t *const *)codewords,
+                                bits, decoded) == 1);
+        CHECK(memcmp(amessage, decoded, AMESSAGE_BYTES) == 0);
 
         /* every codeword is still a valid regular codeword */
-        for (size_t i = 0; i < ap.mu; ++i)
-            CHECK(zbprc_decode(&prc.base, keys->dec, cw[i], bits) == 1);
+        for (size_t i = 0; i < count; ++i)
+            CHECK(zbprc_decode(&prc.base, keys->dec, codewords[i], bits) == 1);
 
-        /* wrong anamorphic keys: indication bits fail or message differs */
-        uint8_t out2[AMSG] = {0};
-        int r = aprc.adecode(&ap, keys->dec, dk2, (const uint8_t *const *)cw, bits, out2);
-        CHECK(r == 0 || memcmp(msg, out2, AMSG) != 0);
+        /* wrong anamorphic keys: indication seeds fail or the message differs */
+        uint8_t other_decoded[AMESSAGE_BYTES] = {0};
+        const int accepted = azbprc_rr_adecode(&aprc, keys->dec, other_akeys,
+                                               (const uint8_t *const *)codewords, bits,
+                                               other_decoded);
+        CHECK(accepted == 0 || memcmp(amessage, other_decoded, AMESSAGE_BYTES) != 0);
 
-        free_codewords(cw, ap.mu);
+        rr_free_codewords(codewords, count);
     }
 
     /* regular codewords (random seeds) are not accepted as anamorphic */
     int accepted = 0;
     for (int t = 0; t < 10; ++t) {
-        uint8_t **cw = calloc(ap.mu, sizeof *cw);
+        uint8_t **codewords = calloc(count, sizeof *codewords);
         size_t bits = 0;
-        for (size_t i = 0; i < ap.mu; ++i)
-            cw[i] = zbprc_encode(&prc.base, keys->enc, &rng, &bits);
-        uint8_t out[AMSG];
-        accepted += aprc.adecode(&ap, keys->dec, dk, (const uint8_t *const *)cw, bits, out) == 1;
-        free_codewords(cw, ap.mu);
+        for (size_t i = 0; i < count; ++i)
+            codewords[i] = zbprc_encode(&prc.base, keys->enc, &rng, &bits);
+        uint8_t decoded[AMESSAGE_BYTES];
+        accepted += azbprc_rr_adecode(&aprc, keys->dec, akeys,
+                                      (const uint8_t *const *)codewords, bits, decoded) == 1;
+        rr_free_codewords(codewords, count);
     }
     CHECK_MSG(accepted == 0, "regular accepted as anamorphic: %d/10", accepted);
 
-    aprc.free_akey(&ap, dk);
-    aprc.free_akey(&ap, dk2);
+    rr_free_akeys(akeys);
+    rr_free_akeys(other_akeys);
     zbprc_free_keys(&prc.base, keys);
+}
+
+/* PRC_cca over PRC^ell_low over the LDPC PRC; the caller frees *low and the result */
+typedef struct {
+    ZBPRC underlying;
+    PRCLow_Params low_params;
+    MBPRC low;
+    PRCReencode_Params params;
+    MBPRC_RR prc;
+} CcaInstance;
+
+static void cca_instance_init(CcaInstance *instance, size_t lambda, size_t message_bits)
+{
+    instance->underlying = prc_ldpc(&ldpc_params);
+    instance->low_params = (PRCLow_Params){
+        .underlying = &instance->underlying,
+        .ell = 2 * lambda + message_bits,
+    };
+    instance->low = prc_low(&instance->low_params);
+    instance->params = (PRCReencode_Params){.inner = &instance->low, .lambda = lambda,
+                                            .delta = 0.05};
+    instance->prc = prc_cca_rr(&instance->params);
 }
 
 static void test_cca_anamorphic(void)
 {
-    enum { MSG = 4, AMSG = 8 };
-    static const LDPCParams lp = {.n = 1024, .r = 512, .g = 256, .t = 11, .eta = 0.01};
-    ZBPRC under = prc_ldpc(&lp);
-    PRCLow_Params low_p = {.underlying = &under, .ell = 64};
-    MBPRC low = prc_low(&low_p);
-    PRC_CCA_Params cp = {.prc = &low, .lambda_bits = 16, .delta = 0.05};
-    MBPRC_RR prc = prc_cca_rr(&cp);
+    enum { MESSAGE_BYTES = 4, AMESSAGE_BYTES = 8 };
+    CcaInstance cca;
+
+    cca_instance_init(&cca, 16, 8 * MESSAGE_BYTES);
 
     /* 2 byte seeds: 8 seeds (16 bytes) hold an 8 byte nonce and the message */
-    aMBPRC_RR_Params ap = {.prc_rr = &prc, .mu = 32 + 8, .message_bytes = AMSG,
-                           .indication_len = 32, .seed_len = 16};
-    aMBPRC_RR aprc = aMBPRC_RR_init(&ap);
+    const aMBPRC_RR aprc = {
+        .shape = {.seed_bits = 16, .indication_seeds = 32, .codeword_count = 32 + 8,
+                  .amessage_bytes = AMESSAGE_BYTES},
+        .prc = &cca.prc,
+    };
+    const size_t count = aprc.shape.codeword_count;
 
-    MBPRC_Keys *keys = mbprc_keygen(&prc.base, &rng);
-    APRC_RR_Keys *dk = aprc.akeygen(&ap, &rng);
-    CHECK(keys != NULL && dk != NULL);
-    if (!keys || !dk) return;
+    MBPRC_Keys *keys = mbprc_keygen(&cca.prc.base, &rng);
+    RR_AKeys *akeys = rr_akeygen(&rng);
+    CHECK(keys != NULL && akeys != NULL);
+    if (!keys || !akeys) return;
 
     for (int t = 0; t < 2; ++t) {
-        uint8_t **regs = calloc(ap.mu, sizeof *regs);
-        for (size_t i = 0; i < ap.mu; ++i) {
-            regs[i] = malloc(MSG);
-            rng.rng(rng.ctx, regs[i], MSG);
+        uint8_t **messages = calloc(count, sizeof *messages);
+        for (size_t i = 0; i < count; ++i) {
+            messages[i] = malloc(MESSAGE_BYTES);
+            rng.rng(rng.ctx, messages[i], MESSAGE_BYTES);
         }
-        uint8_t amsg[AMSG], out[AMSG] = {0};
-        rng.rng(rng.ctx, amsg, sizeof amsg);
+        uint8_t amessage[AMESSAGE_BYTES], decoded[AMESSAGE_BYTES] = {0};
+        rng.rng(rng.ctx, amessage, sizeof amessage);
 
         size_t bits = 0;
-        uint8_t **cw = aprc.aencode(&ap, keys->enc, dk, (const uint8_t **)regs,
-                                    MSG * 8, amsg, &rng, &bits);
-        CHECK(cw != NULL);
-        if (cw != NULL) {
-            CHECK(aprc.adecode(&ap, keys->dec, dk, (const uint8_t *const *)cw,
-                               bits, out, MSG * 8) == 1);
-            CHECK(memcmp(amsg, out, AMSG) == 0);
+        uint8_t **codewords = ambprc_rr_aencode(&aprc, keys->enc, akeys,
+                                                (const uint8_t *const *)messages,
+                                                8 * MESSAGE_BYTES, amessage, &rng, &bits);
+        CHECK(codewords != NULL);
+        if (codewords != NULL) {
+            CHECK(ambprc_rr_adecode(&aprc, keys->dec, akeys, (const uint8_t *const *)codewords,
+                                    bits, 8 * MESSAGE_BYTES, decoded) == 1);
+            CHECK(memcmp(amessage, decoded, AMESSAGE_BYTES) == 0);
 
             /* regular messages are preserved */
-            for (size_t i = 0; i < ap.mu; ++i) {
-                uint8_t m[64] = {0};
-                size_t mb = 0;
-                CHECK(mbprc_decode(&prc.base, keys->dec, cw[i], bits, m, &mb) == 1);
-                CHECK(mb == MSG * 8 && memcmp(m, regs[i], MSG) == 0);
+            for (size_t i = 0; i < count; ++i) {
+                uint8_t message[64] = {0};
+                size_t message_bits = 0;
+                CHECK(mbprc_decode(&cca.prc.base, keys->dec, codewords[i], bits, message,
+                                   &message_bits) == 1);
+                CHECK(message_bits == 8 * MESSAGE_BYTES &&
+                      memcmp(message, messages[i], MESSAGE_BYTES) == 0);
             }
-            free_codewords(cw, ap.mu);
+            rr_free_codewords(codewords, count);
         }
-        free_codewords(regs, ap.mu);
+        rr_free_codewords(messages, count);
     }
 
-    aprc.free_akey(prc.base.params, &ap, dk);
-    mbprc_free_keys(&prc.base, keys);
+    rr_free_akeys(akeys);
+    mbprc_free_keys(&cca.prc.base, keys);
 }
 
 /*
@@ -143,107 +171,116 @@ static void test_cca_anamorphic(void)
  */
 static void test_pp_single_codeword(void)
 {
-    enum { AMSG = 16 };
+    enum { AMESSAGE_BYTES = 16 };
     ECC ecc = hamming74_ecc();
     /* 24 byte seed, Hamming(7,4) doubles it: 48 bytes = 384 symbols */
-    PPParams params = {.delta = 0.0, .ecc = &ecc, .n = 384, .q = 2,
-                       .message_bytes = 24, .symbol_bits = 1};
+    PPParams params = {.ecc = &ecc, .seed_bytes = 24, .q = 2, .symbol_bits = 1,
+                       .n = 384, .delta = 0.0};
     ZBPRC_RR prc = prc_pp_rr(&params);
 
-    CHECK(rr_min_ciphertext_seeds(192, AMSG) == 1);
+    CHECK(rr_min_ciphertext_seeds(192, AMESSAGE_BYTES) == 1);
 
-    aZBPRC_RR_Params ap = {.prc_rr = &prc, .mu = 1, .message_bytes = AMSG,
-                           .indication_len = 0, .seed_len = 192};
-    aZBPRC_RR aprc = aZBPRC_RR_init(&ap);
+    const aZBPRC_RR aprc = {
+        .shape = {.seed_bits = 192, .indication_seeds = 0, .codeword_count = 1,
+                  .amessage_bytes = AMESSAGE_BYTES},
+        .prc = &prc,
+    };
 
     ZBPRC_Keys *keys = zbprc_keygen(&prc.base, &rng);
-    APRC_RR_Keys *dk = aprc.akeygen(&ap, &rng);
-    APRC_RR_Keys *dk2 = aprc.akeygen(&ap, &rng);
-    CHECK(keys != NULL && dk != NULL && dk2 != NULL);
-    if (!keys || !dk || !dk2) return;
+    RR_AKeys *akeys = rr_akeygen(&rng);
+    RR_AKeys *other_akeys = rr_akeygen(&rng);
+    CHECK(keys != NULL && akeys != NULL && other_akeys != NULL);
+    if (!keys || !akeys || !other_akeys) return;
 
     for (int t = 0; t < 10; ++t) {
-        uint8_t msg[AMSG], out[AMSG] = {0}, out2[AMSG] = {0};
-        rng.rng(rng.ctx, msg, sizeof msg);
+        uint8_t amessage[AMESSAGE_BYTES], decoded[AMESSAGE_BYTES] = {0};
+        uint8_t other_decoded[AMESSAGE_BYTES] = {0};
+        rng.rng(rng.ctx, amessage, sizeof amessage);
 
         size_t bits = 0;
-        uint8_t **cw = aprc.aencode(&ap, keys->enc, dk, msg, &rng, &bits);
-        CHECK(cw != NULL);
-        if (cw == NULL) continue;
+        uint8_t **codewords = azbprc_rr_aencode(&aprc, keys->enc, akeys, amessage, &rng, &bits);
+        CHECK(codewords != NULL);
+        if (codewords == NULL) continue;
 
-        CHECK(aprc.adecode(&ap, keys->dec, dk, (const uint8_t *const *)cw, bits, out) == 1);
-        CHECK(memcmp(msg, out, AMSG) == 0);
+        CHECK(azbprc_rr_adecode(&aprc, keys->dec, akeys, (const uint8_t *const *)codewords,
+                                bits, decoded) == 1);
+        CHECK(memcmp(amessage, decoded, AMESSAGE_BYTES) == 0);
 
         /* still a regular codeword, and the wrong key reads garbage */
-        CHECK(zbprc_decode(&prc.base, keys->dec, cw[0], bits) == 1);
-        CHECK(aprc.adecode(&ap, keys->dec, dk2, (const uint8_t *const *)cw, bits, out2) == 1);
-        CHECK(memcmp(msg, out2, AMSG) != 0);
+        CHECK(zbprc_decode(&prc.base, keys->dec, codewords[0], bits) == 1);
+        CHECK(azbprc_rr_adecode(&aprc, keys->dec, other_akeys,
+                                (const uint8_t *const *)codewords, bits, other_decoded) == 1);
+        CHECK(memcmp(amessage, other_decoded, AMESSAGE_BYTES) != 0);
 
-        free_codewords(cw, 1);
+        rr_free_codewords(codewords, 1);
     }
 
     /* the nonce must keep RR_MIN_NONCE_BYTES: a 24 byte seed cannot hold a 17 byte message */
     {
-        aZBPRC_RR_Params bad = {.prc_rr = &prc, .mu = 1, .message_bytes = 17,
-                                .indication_len = 0, .seed_len = 192};
-        aZBPRC_RR abad = aZBPRC_RR_init(&bad);
-        uint8_t msg[24] = {0};
+        const aZBPRC_RR too_long = {
+            .shape = {.seed_bits = 192, .indication_seeds = 0, .codeword_count = 1,
+                      .amessage_bytes = 17},
+            .prc = &prc,
+        };
+        uint8_t amessage[24] = {0};
         size_t bits;
 
-        CHECK(abad.aencode(&bad, keys->enc, dk, msg, &rng, &bits) == NULL);
+        CHECK(azbprc_rr_aencode(&too_long, keys->enc, akeys, amessage, &rng, &bits) == NULL);
         CHECK(rr_min_ciphertext_seeds(192, 17) == 2);
     }
 
-    aprc.free_akey(&ap, dk);
-    aprc.free_akey(&ap, dk2);
+    rr_free_akeys(akeys);
+    rr_free_akeys(other_akeys);
     zbprc_free_keys(&prc.base, keys);
 }
 
 static void test_cca_single_codeword(void)
 {
-    enum { MSG = 4, AMSG = 8 };
-    static const LDPCParams lp = {.n = 1024, .r = 512, .g = 256, .t = 11, .eta = 0.01};
-    ZBPRC under = prc_ldpc(&lp);
-    /* seed (128) || message (32) || mask (128) bits */
-    PRCLow_Params low_p = {.underlying = &under, .ell = 288};
-    MBPRC low = prc_low(&low_p);
-    PRC_CCA_Params cp = {.prc = &low, .lambda_bits = 128, .delta = 0.05};
-    MBPRC_RR prc = prc_cca_rr(&cp);
+    enum { MESSAGE_BYTES = 4, AMESSAGE_BYTES = 8 };
+    CcaInstance cca;
+
+    /* r (128) || m (32) || R2 (128) bits */
+    cca_instance_init(&cca, 128, 8 * MESSAGE_BYTES);
 
     /* a 16 byte seed holds an 8 byte nonce and an 8 byte message */
-    aMBPRC_RR_Params ap = {.prc_rr = &prc, .mu = 1, .message_bytes = AMSG,
-                           .indication_len = 0, .seed_len = 128};
-    aMBPRC_RR aprc = aMBPRC_RR_init(&ap);
+    const aMBPRC_RR aprc = {
+        .shape = {.seed_bits = 128, .indication_seeds = 0, .codeword_count = 1,
+                  .amessage_bytes = AMESSAGE_BYTES},
+        .prc = &cca.prc,
+    };
 
-    MBPRC_Keys *keys = mbprc_keygen(&prc.base, &rng);
-    APRC_RR_Keys *dk = aprc.akeygen(&ap, &rng);
-    CHECK(keys != NULL && dk != NULL);
-    if (!keys || !dk) return;
+    MBPRC_Keys *keys = mbprc_keygen(&cca.prc.base, &rng);
+    RR_AKeys *akeys = rr_akeygen(&rng);
+    CHECK(keys != NULL && akeys != NULL);
+    if (!keys || !akeys) return;
 
     for (int t = 0; t < 2; ++t) {
-        uint8_t reg[MSG], amsg[AMSG], out[AMSG] = {0};
-        const uint8_t *regs[1] = {reg};
-        rng.rng(rng.ctx, reg, sizeof reg);
-        rng.rng(rng.ctx, amsg, sizeof amsg);
+        uint8_t message[MESSAGE_BYTES], amessage[AMESSAGE_BYTES], decoded[AMESSAGE_BYTES] = {0};
+        const uint8_t *messages[1] = {message};
+        rng.rng(rng.ctx, message, sizeof message);
+        rng.rng(rng.ctx, amessage, sizeof amessage);
 
         size_t bits = 0;
-        uint8_t **cw = aprc.aencode(&ap, keys->enc, dk, regs, MSG * 8, amsg, &rng, &bits);
-        CHECK(cw != NULL);
-        if (cw == NULL) continue;
+        uint8_t **codewords = ambprc_rr_aencode(&aprc, keys->enc, akeys, messages,
+                                                8 * MESSAGE_BYTES, amessage, &rng, &bits);
+        CHECK(codewords != NULL);
+        if (codewords == NULL) continue;
 
-        CHECK(aprc.adecode(&ap, keys->dec, dk, (const uint8_t *const *)cw, bits, out, MSG * 8) == 1);
-        CHECK(memcmp(amsg, out, AMSG) == 0);
+        CHECK(ambprc_rr_adecode(&aprc, keys->dec, akeys, (const uint8_t *const *)codewords,
+                                bits, 8 * MESSAGE_BYTES, decoded) == 1);
+        CHECK(memcmp(amessage, decoded, AMESSAGE_BYTES) == 0);
 
-        uint8_t m[64] = {0};
-        size_t mb = 0;
-        CHECK(mbprc_decode(&prc.base, keys->dec, cw[0], bits, m, &mb) == 1);
-        CHECK(mb == MSG * 8 && memcmp(m, reg, MSG) == 0);
+        uint8_t regular[64] = {0};
+        size_t regular_bits = 0;
+        CHECK(mbprc_decode(&cca.prc.base, keys->dec, codewords[0], bits, regular,
+                           &regular_bits) == 1);
+        CHECK(regular_bits == 8 * MESSAGE_BYTES && memcmp(regular, message, MESSAGE_BYTES) == 0);
 
-        free_codewords(cw, 1);
+        rr_free_codewords(codewords, 1);
     }
 
-    aprc.free_akey(prc.base.params, &ap, dk);
-    mbprc_free_keys(&prc.base, keys);
+    rr_free_akeys(akeys);
+    mbprc_free_keys(&cca.prc.base, keys);
 }
 
 int main(void)
@@ -251,6 +288,9 @@ int main(void)
     if (sodium_init() < 0)
         return 1;
     rng = linux_randomness();
+
+    if (ldpc_admissible_choice(16384, 6.0 / 7.0, 0.25, 0.005, &ldpc_params, NULL) != 0)
+        return 1;
 
     RUN(test_pp_anamorphic);
     RUN(test_cca_anamorphic);
