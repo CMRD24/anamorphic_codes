@@ -4,8 +4,9 @@
  *
  * aKeyGen samples a second sparse parity-check matrix P' <- S_{t,r',n} until
  * P'G has full row rank r', and computes a matrix B (g x kappa, kappa = g - r')
- * whose columns are a basis of ker(P'G). The double key is dk = B, the trapdoor
- * key tk = P'. Only the matrix P'G enters the basis computation, not P'.
+ * whose columns are a basis of ker(P'G). The double key is dk = B (stored as the
+ * n x kappa product G B), the trapdoor key tk = P'. Only the matrix P'G enters
+ * the basis computation, not P'.
  *
  * aEncode is the regular encoding with the secret restricted to that subspace:
  * c = G B s + z + e with s uniform in F_2^kappa. Then P'G B s = 0, so the syndrome
@@ -38,7 +39,7 @@
 
 
 struct AZBPRC_DoubleKey {
-    ColumnMatrix B;          /* g x kappa, columns a basis of ker(P'G) */
+    ColumnMatrix GB;         /* n x kappa: G B, the columns of B a basis of ker(P'G) */
 };
 
 struct AZBPRC_TrapdoorKey {
@@ -144,7 +145,7 @@ static void ldpc_free_double_key(const void *params, const void *aparams,
     if (double_key == NULL)
         return;
 
-    column_matrix_free(&double_key->B);
+    column_matrix_free(&double_key->GB);
     free(double_key);
 }
 
@@ -165,7 +166,8 @@ static void ldpc_free_trapdoor_key(const void *params, const void *aparams,
  * aKeyGen: samples P' <- S_{t,r',n} until rk(P'G) = r', i.e. until
  * dim ker(P'G) = g - r' (an r' x g matrix with uniform columns has full rank
  * except with probability below 2^-kappa); gives up after lambda = n attempts.
- * Returns dk = B and tk = P'; of the regular keys only G is read.
+ * Returns dk = B and tk = P'; of the regular keys only G is read. dk is stored
+ * as the product G B, so that aEncode needs one matrix-vector product only.
  */
 static AZBPRC_Keys *ldpc_akeygen(const void *params_ptr, const void *aparams_ptr,
                                  ZBPRC_Keys *regular_keys, RandomnessSource *random)
@@ -222,8 +224,9 @@ static AZBPRC_Keys *ldpc_akeygen(const void *params_ptr, const void *aparams_ptr
         return NULL;
     }
 
-    akeys->double_key->B = B;
+    akeys->double_key->GB = column_matrix_mul(G, &B);
     akeys->trapdoor_key->P_prime = P_prime;
+    column_matrix_free(&B);
 
     return akeys;
 }
@@ -244,15 +247,14 @@ static uint8_t *ldpc_aencode(const void *params_ptr,
         random == NULL || codeword_bits == NULL)
         return NULL;
 
-    BitVector s = bitvector_alloc(double_key->B.cols);
-    BitVector Bs = bitvector_alloc(params->g);
+    /* the regular encoding with generator matrix G B: c = (G B) s + z + e (a shallow copy, nothing to free) */
+    const ZBPRC_EncKey restricted = {.G = double_key->GB, .z = enc_key->z};
+    BitVector s = bitvector_alloc(double_key->GB.cols);
 
     random_bitvector(random, &s);
-    column_matrix_mul_vector(&double_key->B, &s, &Bs);
 
-    uint8_t *codeword = ldpc_encode_seed(params, enc_key, &Bs, random, codeword_bits);
+    uint8_t *codeword = ldpc_encode_seed(params, &restricted, &s, random, codeword_bits);
 
-    bitvector_free(&Bs);
     bitvector_free(&s);
 
     return codeword;

@@ -60,6 +60,9 @@ void column_matrix_mul_vector(const ColumnMatrix *M, const BitVector *x, BitVect
 /* the product P M of a sparse and a column matrix */
 ColumnMatrix sparse_matrix_mul_column_matrix(const SparseMatrix *P, const ColumnMatrix *M);
 
+/* the product A B of two column matrices (A.cols == B.rows) */
+ColumnMatrix column_matrix_mul(const ColumnMatrix *A, const ColumnMatrix *B);
+
 /* a basis of ker M = { x : M x = 0 } as the columns of a M.cols x dim ker M matrix */
 ColumnMatrix column_matrix_kernel(const ColumnMatrix *M);
 

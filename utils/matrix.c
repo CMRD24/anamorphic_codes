@@ -254,6 +254,41 @@ ColumnMatrix sparse_matrix_mul_column_matrix(const SparseMatrix *P, const Column
     return product;
 }
 
+/* M^T as an M4RI matrix: the rows of M^T are the columns of M */
+static mzd_t *transposed_mzd(const ColumnMatrix *M)
+{
+    mzd_t *Mt = mzd_init((rci_t)M->cols, (rci_t)M->rows);
+
+    for (size_t j = 0; j < M->cols; ++j)
+        memcpy(mzd_row(Mt, (rci_t)j), M->columns[j].data, M->columns[j].words * sizeof(uint64_t));
+
+    return Mt;
+}
+
+/*
+ * A B via M4RI, computed as (A B)^T = B^T A^T: the transposes are the column
+ * matrices read as rows, and the rows of the result are the columns of A B.
+ */
+ColumnMatrix column_matrix_mul(const ColumnMatrix *A, const ColumnMatrix *B)
+{
+    ColumnMatrix product = column_matrix_alloc(A->rows, B->cols);
+    mzd_t *At = transposed_mzd(A);
+    mzd_t *Bt = transposed_mzd(B);
+    mzd_t *Ct = mzd_mul(NULL, Bt, At, 0); //https://malb.bitbucket.io/m4ri/brilliantrussian_8h.html: C = A B, cutoff 0 = default
+
+    for (size_t j = 0; j < product.cols; ++j) {
+        memcpy(product.columns[j].data, mzd_row(Ct, (rci_t)j),
+               product.columns[j].words * sizeof(uint64_t));
+        clear_padding(&product.columns[j]);
+    }
+
+    mzd_free(Ct);
+    mzd_free(Bt);
+    mzd_free(At);
+
+    return product;
+}
+
 /*
  * ker M via M4RI: the PLUQ decomposition of M gives the M.cols x (M.cols - rank)
  * matrix X with M X = 0 and independent columns (rank-nullity), which is the
