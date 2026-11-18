@@ -68,6 +68,7 @@ static void test_pp_anamorphic(void)
         rr_free_codewords(codewords, count);
     }
 
+    //for the given SKE this test is pointless, but can keep it  for future implementations of other used SKEs
     /* regular codewords (random seeds) are not accepted as anamorphic */
     int accepted = 0;
     for (int t = 0; t < 10; ++t) {

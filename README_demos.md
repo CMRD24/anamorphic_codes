@@ -194,12 +194,11 @@ build/demo_cca --dir bob decode  msg.ct   # codeword 0: ping ...
 - `adecode` of `demo_wiretap`, and of `pp`, `high`, `sharp`, `cca` with the default
   `indication_seeds=0`, returns output for ciphertexts that contain no anamorphic
   message: the encryption of the seed is not authenticated, so every ciphertext
-  decodes to something (set `indication_seeds` for the PRCs to get rejection).
+  decodes to something.
   `demo_ldpc`, `demo_1a`, `demo_low` and `demo_rlnc` reject ciphertexts without
   an anamorphic message.
 - The PRC demos do not model a channel; to test error correction, flip bits in
   the ciphertext file yourself.
-- `dc` has no anamorphic mode.
 
 ## Benchmark
 
@@ -244,9 +243,4 @@ Notes:
   only once per key). It is about zero for the randomness-recovery codes, whose
   anamorphic key is just random bytes. `rlnc` and `wiretap` are keyless and only
   have the anamorphic key.
-- The randomness-recovery codes (`pp`, `high`, `sharp`, `cca`) use `mu = 1` by
-  default, so an anamorphic ciphertext is as large as a regular one and the
-  overhead is the encryption of the seed. Set `--param CODE:indication_seeds=N` or
-  a longer `amessage_bytes` to benchmark `mu > 1`; the anamorphic operations
-  then process `mu` times as much data and the ratio mostly reflects `mu`.
 - The codes print their results while decoding; `bench` discards that output.

@@ -16,6 +16,8 @@
 #include "prcs/zerobit/implementations/prc_ldpc.h"
 #include "prcs/zerobit/zerobit_prc.h"
 
+//the zerobit anamorphic key from ldpc is stored in LdpcDemo
+
 typedef struct DemoPrc {
     /* ---- filled in by the demo ---- */
     int zerobit;                     /* 1: zero-bit PRC, 0: multibit PRC */

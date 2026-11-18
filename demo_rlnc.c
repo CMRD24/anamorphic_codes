@@ -120,7 +120,7 @@ static rlnc_packet_t *view_packets(const RlncDemo *demo, const DemoCiphertext *c
 
     for (size_t i = 0; packets != NULL && i < ciphertext->count; ++i) {
         packets[i].global_vector = ciphertext->data[i];
-        packets[i].payload = ciphertext->data[i] + demo->config.generation_size;
+        packets[i].payload = ciphertext->data[i] + demo->config.generation_size; //points into payload
     }
 
     return packets;
@@ -263,7 +263,7 @@ static int rlnc_aencode_op(void *handle, const char *message, const char *amessa
         demo_pad_message(amessage_text, amessage, amessage_length) == 0) {
         /* one GF(q) symbol per byte */
         for (size_t i = 0; i < amessage_length; ++i)
-            amessage[i] &= (uint8_t)(demo->config.q - 1);
+            amessage[i] &= (uint8_t)(demo->config.q - 1); //only take the lowest q-1 bits
 
         result = rlnc_aencode(&demo->config, &demo->aconfig, source, symbols,
                               demo->sent_symbols, &random, demo->key, amessage);

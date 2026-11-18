@@ -18,7 +18,7 @@ static int tests_failed = 0;
             ++tests_failed;                                               \
             printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);      \
         }                                                                 \
-    } while (0)
+    } while (0) // do while only for syntax reasons
 
 #define CHECK_MSG(cond, ...)                                              \
     do {                                                                  \
@@ -29,7 +29,7 @@ static int tests_failed = 0;
             printf(__VA_ARGS__);                                          \
             printf("\n");                                                 \
         }                                                                 \
-    } while (0)
+    } while (0) // do while only for syntax reasons
 
 #define RUN(test)                                                         \
     do {                                                                  \
@@ -38,7 +38,7 @@ static int tests_failed = 0;
         test();                                                           \
         printf("[ %s ] %s\n", tests_failed == before ? " OK " : "FAIL",   \
                #test);                                                    \
-    } while (0)
+    } while (0) // do while only for syntax reasons
 
 static inline int test_summary(const char *suite)
 {
@@ -57,11 +57,12 @@ static inline void test_bsc(uint8_t *bits, size_t nbits, double p,
         rng->rng(rng->ctx, b, sizeof b);
         uint32_t v = (uint32_t)b[0] | (uint32_t)b[1] << 8 |
                      (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
-        if ((double)v / 4294967296.0 < p)
-            bits[i >> 3] ^= (uint8_t)(1u << (i & 7));
+        if ((double)v / 4294967296.0 < p) //same trick as before , 4294967296 is the max value (2^32)
+            bits[i >> 3] ^= (uint8_t)(1u << (i & 7)); //flip bit at position i in bits
     }
 }
 
+//allocate exatctly nbits bits
 static inline uint8_t *test_random_bits(size_t nbits, RandomnessSource *rng)
 {
     size_t bytes = (nbits + 7) / 8;

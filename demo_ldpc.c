@@ -12,7 +12,7 @@ static const DemoParamSpec specs[] = {
 };
 
 typedef struct {
-    DemoPrc base;           /* must be first */
+    DemoPrc base;           /* must be first */ //because LdpcDemo* is treated as DemoPrc*
     LDPCParams params;
     A_LDPCParams aparams;
     aZBPRC aprc;
@@ -36,7 +36,7 @@ static int ldpc_akeygen(void *handle, const uint8_t key[DEMO_KEY_BYTES])
     LdpcDemo *demo = handle;
 
     if (demo->base.zerobit_keys == NULL) {
-        fprintf(stderr, "the anamorphic key generation needs the regular key\n");
+        fprintf(stderr, "the anamorphic key generation needs the regular encoding key\n");
         return -1;
     }
 

@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+#define _POSIX_C_SOURCE 200809L //to access posix standard functions
 
 /*
  * Benchmark: anamorphic versus regular operations.
@@ -50,7 +50,7 @@ static const BenchCode codes[] = {
     {"sharp",   &demo_sharp_ops},
     {"cca",     &demo_cca_ops},
     {"rlnc",    &demo_rlnc_ops},
-#ifndef BENCH_NO_WIRETAP
+#ifndef BENCH_NO_WIRETAP //only because my PC couln't install the openssl library for some reason.
     {"wiretap", &demo_wiretap_ops},
 #endif
 };
@@ -86,7 +86,7 @@ static double now_ms(void)
 }
 
 typedef struct {
-    double *values;
+    double *values; //times taken (each single sample)
     size_t count;
     size_t capacity;
     size_t failures;
@@ -165,11 +165,12 @@ static void quiet_begin(void)
     devnull = open("/dev/null", O_WRONLY);
 
     if (devnull >= 0) {
-        dup2(devnull, 1);
+        dup2(devnull, 1); //set stdout to dev/null
         close(devnull);
     }
 }
 
+//restore stdout
 static void quiet_end(void)
 {
     fflush(stdout);
@@ -269,9 +270,9 @@ static int run_round(const DemoOps *ops, void *handle, CodeResult *result)
 
         if (result->regular_count == 0) {
             result->regular_count = ciphertext.count;
-            result->regular_bits = ciphertext.bits;
+            result->regular_bits = ciphertext.bits; 
             result->anamorphic_count = aciphertext.count;
-            result->anamorphic_bits = aciphertext.bits;
+            result->anamorphic_bits = aciphertext.bits; //kind of pointless because both anamorphic and regular will have exactly the same number of bits, but ok.
         }
     }
 
@@ -317,7 +318,7 @@ static int run_code(const BenchCode *code, const Options *opt, CodeResult *resul
         /* regular key generation (opening with the regular key only) */
         keys.have_regular = ops->regular_keys;
         start = now_ms();
-        handle = ops->open(&params, &keys);
+        handle = ops->open(&params, &keys); //it does make sense to measure open instead of keygen directly because ops also takes into account the time to initialize other requirements for the key generation
         const double t_regular = now_ms() - start;
 
         if (handle == NULL)
@@ -333,12 +334,12 @@ static int run_code(const BenchCode *code, const Options *opt, CodeResult *resul
             return -1;
         }
 
-        if (ops->regular_keys)
+        if (ops->regular_keys) //some codes have no regular keys (e.g. rlnc, wiretap)
             samples_add(&result->keygen_regular, t_regular);
         samples_add(&result->keygen_anamorphic, t_anamorphic);
 
         /* one untimed round per key: first-use costs (cold caches, lazy
-         * allocation) would otherwise dominate small samples */
+         * allocation) could otherwise dominate small samples */
         int status = run_round(ops, handle, NULL);
 
         for (size_t i = 0; status == 0 && i < opt->ops; ++i)
@@ -364,11 +365,11 @@ static void print_row(FILE *out, const char *name, const Samples *samples)
     Stats stats = stats_of(samples);
 
     if (stats.count == 0) {
-        fprintf(out, "  %-24s %14s\n", name, "n/a");
+        fprintf(out, "  %-24s %14s\n", name, "n/a"); //-24s: 24 character field left aligned, %14s character field right aligned
         return;
     }
 
-    fprintf(out, "  %-24s %14.6f %14.6f %14.6f %7zu", name, stats.mean, stats.stddev, stats.min, stats.count);
+    fprintf(out, "  %-24s %14.6f %14.6f %14.6f %7zu", name, stats.mean, stats.stddev, stats.min, stats.count); // %14.6f 14 character field with 6 digits after point, %7zu: size_t in 7 character field. 
     if (samples->failures > 0)
         fprintf(out, "   (%zu failed)", samples->failures);
     fprintf(out, "\n");
@@ -397,6 +398,7 @@ static void csv_row(FILE *csv, const char *code, const char *op, const Samples *
 static void report(FILE *out, FILE *csv, const BenchCode *code, const Options *opt, CodeResult *result)
 {
     Samples regular_total, anamorphic_total;
+    //encode + decode combined:
     int have_totals = samples_sum(&regular_total, &result->encode, &result->decode) == 0 &&
                       samples_sum(&anamorphic_total, &result->aencode, &result->adecode) == 0;
 
@@ -468,6 +470,7 @@ static void usage(const char *prog)
         "and fresh uniformly random messages.\n");
 }
 
+//convert string to size_t:
 static int parse_size(const char *samples, size_t *out)
 {
     char *end;
@@ -483,15 +486,17 @@ static int parse_size(const char *samples, size_t *out)
 
 static int parse_options(int argc, char **argv, Options *opt)
 {
+    //defaults:
     opt->keys = 3;
     opt->ops = 10;
     strcpy(opt->selection, "all");
     opt->num_overrides = 0;
     opt->csv = NULL;
 
+    //parse command line arguments:
     for (int i = 1; i < argc; ++i) {
         const char *argument = argv[i];
-        const char *value = i + 1 < argc ? argv[i + 1] : NULL;
+        const char *value = i + 1 < argc ? argv[i + 1] : NULL; //value is directly after argument
 
         if (strcmp(argument, "--keys") == 0 && value) {
             if (parse_size(value, &opt->keys) != 0) {
@@ -521,12 +526,13 @@ static int parse_options(int argc, char **argv, Options *opt)
             const char *equals = strchr(value, '=');
 
             if (opt->num_overrides >= MAX_PARAM_OVERRIDES || !colon || !equals || colon > equals ||
-                (size_t)(colon - value) >= sizeof(override->code) || (size_t)(equals - colon - 1) >= sizeof(override->name) ||
-                strlen(equals + 1) >= sizeof(override->value)) {
+                (size_t)(colon - value) >= sizeof(override->code) || (size_t)(equals - colon - 1) >= sizeof(override->name) || 
+                strlen(equals + 1) >= sizeof(override->value)) { //(size_t)(colon - value) >= sizeof(override->code) because in (name): name must be of a prc. Same for the argument name and value.
                 fprintf(stderr, "--param expects CODE:NAME=VALUE, got '%s'\n", value);
                 return -1;
             }
 
+            //store new option:
             override = &opt->overrides[opt->num_overrides++];
             memset(override, 0, sizeof(*override));
             memcpy(override->code, value, (size_t)(colon - value));
@@ -541,6 +547,7 @@ static int parse_options(int argc, char **argv, Options *opt)
     return 0;
 }
 
+//get wif a code was selected
 static int selected(const Options *opt, const char *name)
 {
     char list[256];
@@ -550,7 +557,7 @@ static int selected(const Options *opt, const char *name)
         return 1;
 
     strcpy(list, opt->selection);
-    for (token = strtok(list, ","); token != NULL; token = strtok(NULL, ",")) {
+    for (token = strtok(list, ","); token != NULL; token = strtok(NULL, ",")) { //strtok memorizes where the previous call left, that is why strtok(NULL, ",")  works
         if (strcmp(token, name) == 0)
             return 1;
     }
@@ -605,7 +612,7 @@ int main(int argc, char **argv)
             status = 1;
         } else {
             report(out, csv, &codes[i], &opt, &result);
-            fflush(out); /* before the progress line of the next code on stderr */
+            fflush(out); /* write to file. before the progress line of the next code on stderr */
         }
 
         code_result_free(&result);

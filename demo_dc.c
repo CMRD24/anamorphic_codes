@@ -1,4 +1,5 @@
 /* Deletion-channel zero-bit PRC on top of the LDPC PRC (no anamorphic mode). */
+//this PRC is not part of the benchmarks or thesis. I kept it because I had already implemented it before.
 #include <stdio.h>
 
 #include "demo_prc.h"

@@ -310,7 +310,7 @@ static int ct_read(const char *path, DemoCiphertext *ciphertext)
 
     if (fgets(header, sizeof(header), file) == NULL ||
         strncmp(header, "demo-ciphertext", 15) != 0 ||
-        fgets(header, sizeof(header), file) == NULL ||
+        fgets(header, sizeof(header), file) == NULL || //read second line
         sscanf(header, "%zu %zu", &count, &bits) != 2 ||
         count == 0 || bits == 0 || count > (1u << 20) || bits > (1u << 30)) {
         fprintf(stderr, "%s: not a ciphertext file\n", path);
@@ -450,8 +450,8 @@ typedef struct {
     const DemoOps *ops;
     const char *dir;
     char params_path[512];
-    char regular_path[512];
-    char anamorphic_path[512];
+    char regular_path[512]; //key path
+    char anamorphic_path[512]; //key path
 } DemoState;
 
 static void usage(const DemoOps *ops)
@@ -656,6 +656,7 @@ static void *open_code(const DemoState *state, int need_regular, int need_anamor
     return state->ops->open(&params, &keys);
 }
 
+//argv: amessage message file
 static int cmd_encode(const DemoState *state, int anamorphic, int argc, char **argv)
 {
     const char *message = NULL, *amessage = NULL, *file;
@@ -664,7 +665,7 @@ static int cmd_encode(const DemoState *state, int anamorphic, int argc, char **a
     int result;
 
     if (anamorphic) {
-        if (argc < 2 || argc > 3)
+        if (argc < 2 || argc > 3) 
             return -2;
         amessage = argv[0];
         message = argc == 3 ? argv[1] : NULL;
@@ -730,10 +731,11 @@ int demo_main(const DemoOps *ops, int argc, char **argv)
         return 1;
     }
 
+    //first argument is program name:
     ++argv;
     --argc;
 
-    snprintf(default_dir, sizeof(default_dir), "%s_demo", ops->name);
+    snprintf(default_dir, sizeof(default_dir), "%s_demo", ops->name); //write (name)_demo to default_dir
     state.dir = default_dir;
 
     if (argc >= 2 && strcmp(argv[0], "--dir") == 0) {
@@ -751,7 +753,8 @@ int demo_main(const DemoOps *ops, int argc, char **argv)
     ++argv;
     --argc;
 
-    mkdir(state.dir, 0777);
+    mkdir(state.dir, 0777); //give everyone access to folder
+    //filenames:
     snprintf(state.params_path, sizeof(state.params_path), "%s/params.txt", state.dir);
     snprintf(state.regular_path, sizeof(state.regular_path), "%s/key.regular", state.dir);
     snprintf(state.anamorphic_path, sizeof(state.anamorphic_path), "%s/key.anamorphic", state.dir);
