@@ -167,7 +167,7 @@ static char *random_nonzero_bits(size_t count)
 
     while (!nonzero) {
         for (size_t i = 0; i < count; ++i) {
-            text[i] = (char)('0' + randombytes_uniform(2));
+            text[i] = (char)('0' + randombytes_uniform(2)); //todo: say in thesis where randomness comes from? Here: libsodium. Rather not, too much of a detail
             nonzero |= text[i] == '1';
         }
     }
@@ -423,7 +423,7 @@ static const uint8_t **parse_messages(const DemoPrc *prc, const char *text, size
 {
     const size_t bytes = message_bytes(prc);
     const uint8_t **messages = calloc(count, sizeof(*messages) + bytes);
-    char *copy = strdup(text != NULL ? text : "");
+    char *copy = strdup(text != NULL ? text : ""); //duplicates text
     char *cursor = copy, *piece = copy;
     int parsed = messages != NULL && copy != NULL;
     uint8_t *buffer = messages != NULL ? (uint8_t *)(messages + count) : NULL;
@@ -433,9 +433,9 @@ static const uint8_t **parse_messages(const DemoPrc *prc, const char *text, size
 
         if (cursor != NULL) {
             piece = cursor;
-            if (separator != NULL)
+            if (separator != NULL) //has ; because cursor is NULL
                 *separator = '\0';
-            cursor = separator != NULL ? separator + 1 : NULL;
+            cursor = separator != NULL ? separator + 1 : NULL; //set to next message (after ;)
         }
 
         messages[i] = buffer + i * bytes;
